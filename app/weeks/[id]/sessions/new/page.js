@@ -14,7 +14,7 @@ export default function NewSessionPage() {
     start_time: '08:00',
     location: '',
     court_count: 2,
-    format: 'paired_rotation',
+    format: 'switch_partners',
     status: 'open',
     notes: '',
   })
@@ -71,14 +71,12 @@ export default function NewSessionPage() {
         </div>
 
         <div>
-          <label className="block text-sm text-gray-600 mb-1">Play format</label>
-          <select name="format" value={form.format} onChange={handleChange} className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-            <option value="paired_rotation">Paired rotation</option>
-            <option value="rotation_keep_partners">Rotation — keep partners</option>
-            <option value="rotation_rotate_partners">Rotation — rotate partners</option>
-            <option value="no_rotation">No rotation</option>
-          </select>
-        </div>
+  <label className="block text-sm text-gray-600 mb-1">Play format</label>
+  <select name="format" value={form.format} onChange={handleChange} className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
+    <option value="switch_partners">Switch partners</option>
+    <option value="keep_partners">Keep partners</option>
+  </select>
+</div>
 
         <div>
           <label className="block text-sm text-gray-600 mb-1">Reminder note</label>

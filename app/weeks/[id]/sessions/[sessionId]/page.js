@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import SendReminderButton from '@/app/SendReminderButton'
 
 export default async function SessionPage({ params }) {
   const { id, sessionId } = await params
@@ -60,22 +61,29 @@ export default async function SessionPage({ params }) {
       )}
 
       <div className="flex justify-between items-center mb-4">
-        <div className="flex items-center gap-4">
-          <h2 className="text-lg font-medium">Players</h2>
-          <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-            isFull
-              ? 'bg-green-100 text-green-700'
-              : playerCount === 0
-              ? 'bg-gray-100 text-gray-500'
-              : 'bg-amber-100 text-amber-700'
-          }`}>
-            {playerCount} signed up
-            {!isFull && playerCount > 0 && ` · needs ${spotsNeeded} more`}
-            {isFull && ' · full'}
-          </span>
-        </div>
-        <a href={`/weeks/${id}/sessions/${sessionId}/add-player`} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Add player</a>
-      </div>
+  <div className="flex items-center gap-4">
+    <h2 className="text-lg font-medium">Players</h2>
+    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+      isFull
+        ? 'bg-green-100 text-green-700'
+        : playerCount === 0
+        ? 'bg-gray-100 text-gray-500'
+        : 'bg-amber-100 text-amber-700'
+    }`}>
+      {playerCount} signed up
+      {!isFull && playerCount > 0 && ` · needs ${spotsNeeded} more`}
+      {isFull && ' · full'}
+    </span>
+  </div>
+  <div className="flex items-center gap-3">
+    <SendReminderButton
+      sessionId={sessionId}
+      reminderSentAt={session.reminder_sent_at}
+      playerCount={playerCount}
+    />
+    <a href={`/weeks/${id}/sessions/${sessionId}/add-player`} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Add player</a>
+  </div>
+</div>
 
       {availability.length === 0 ? (
         <p className="text-gray-500 text-sm">No players signed up yet.</p>

@@ -41,8 +41,10 @@ export default async function PlayersPage() {
               className="border-b border-gray-100 text-sm hover:bg-gray-50"
             >
               <td className="py-3 pr-6 font-medium">
-                {player.first_name} {player.last_name}
-              </td>
+  <a href={`/players/${player.id}`} className="hover:underline text-blue-600">
+    {player.first_name} {player.last_name}
+  </a>
+</td>
               <td className="py-3 pr-6 text-gray-600">{player.mobile}</td>
               <td className="py-3 pr-6 text-gray-600">{player.gender}</td>
               <td className="py-3 pr-6 text-gray-600">{player.skill_admin}</td>

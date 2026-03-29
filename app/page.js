@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
+import SendSignupButton from './SendSignupButton'
 
 export default async function Dashboard() {
   const { data: weeks } = await supabase
@@ -79,13 +80,16 @@ export default async function Dashboard() {
         </div>
       ) : (
         <>
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <h1 className="text-xl md:text-2xl font-semibold text-gray-900">Dashboard</h1>
-              <p className="text-sm text-gray-500 mt-0.5">Week of {weekLabel}</p>
-            </div>
-            <Link href="/weeks" className="text-sm text-gray-500 hover:text-gray-700">All weeks</Link>
-          </div>
+          <div className="flex justify-between items-start mb-6">
+  <div>
+    <h1 className="text-xl md:text-2xl font-semibold text-gray-900">Dashboard</h1>
+    <p className="text-sm text-gray-500 mt-0.5">Week of {weekLabel}</p>
+  </div>
+  <div className="flex flex-col items-end gap-2">
+    <Link href="/weeks" className="text-sm text-gray-500 hover:text-gray-700">All weeks</Link>
+    <SendSignupButton weekId={week.id} />
+  </div>
+</div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
             <div className="bg-gray-50 rounded-xl p-4">

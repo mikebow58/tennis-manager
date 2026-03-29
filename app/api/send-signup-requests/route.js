@@ -55,5 +55,9 @@ export async function POST(request) {
     }
   }
 
-  return Response.json({ success: true, results })
-}
+await supabase
+    .from('weeks')
+    .update({ signup_sent_at: new Date().toISOString() })
+    .eq('id', weekId)
+
+  return Response.json({ success: true, results })}

@@ -2,9 +2,19 @@
 
 import { useState } from 'react'
 
-export default function SendSignupButton({ weekId }) {
+export default function SendSignupButton({ weekId, signupSentAt }) {
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState(null)
+  const [sent, setSent] = useState(!!signupSentAt)
+
+  const sentLabel = signupSentAt
+    ? new Date(signupSentAt).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      })
+    : null
 
   async function handleSend() {
     const confirmed = window.confirm(
@@ -25,10 +35,25 @@ export default function SendSignupButton({ weekId }) {
     setSending(false)
 
     if (data.success) {
+      setSent(true)
       setResult(`Sent ${data.results.sent} emails · ${data.results.skipped} skipped · ${data.results.failed} failed`)
     } else {
       setResult('Something went wrong. Check the console.')
     }
+  }
+
+  if (sent) {
+    return (
+      <div className="text-right">
+        <div className="text-xs text-green-600 font-medium">Signup requests sent</div>
+        {sentLabel && (
+          <div className="text-xs text-gray-400">{sentLabel}</div>
+        )}
+        {result && (
+          <div className="text-xs text-gray-400 mt-1">{result}</div>
+        )}
+      </div>
+    )
   }
 
   return (

@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import { generateToken } from '@/lib/tokens'
 
 export default function NewPlayerPage() {
   const router = useRouter()
@@ -36,8 +37,8 @@ export default function NewPlayerPage() {
   }
 
   const { error } = await supabase
-    .from('players')
-    .insert([cleaned])
+  .from('players')
+  .insert([{ ...cleaned, signup_token: generateToken() }])
 
   if (error) {
     console.error(error)

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
 
 export default function CancelForm({ playerId, playerName, sessionId, availabilityId }) {
   const [cancelling, setCancelling] = useState(false)
@@ -10,13 +9,15 @@ export default function CancelForm({ playerId, playerName, sessionId, availabili
   async function handleCancel() {
     setCancelling(true)
 
-    const { error } = await supabase
-      .from('availability')
-      .delete()
-      .eq('id', availabilityId)
+    const response = await fetch('/api/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ availabilityId, playerId, sessionId })
+    })
 
-    if (error) {
-      console.error(error)
+    const data = await response.json()
+
+    if (!data.success) {
       alert('Something went wrong. Please try again.')
       setCancelling(false)
       return

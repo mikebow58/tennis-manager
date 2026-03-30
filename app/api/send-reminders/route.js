@@ -23,7 +23,7 @@ export async function POST(request) {
 
   const { data: availability, error: availError } = await supabase
     .from('availability')
-    .select('*, players(id, first_name, email)')
+    .select('*, players(id, first_name, email, signup_token)')
     .eq('session_id', sessionId)
     .eq('status', 'confirmed')
 
@@ -40,13 +40,17 @@ export async function POST(request) {
       continue
     }
 
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+    const cancelUrl = `${baseUrl}/cancel/${player.signup_token}/${sessionId}`
+
     const success = await sendReminder({
       playerName: player.first_name,
       playerEmail: player.email,
       sessionDate,
       startTime: session.start_time,
       location: session.location,
-      notes: session.notes
+      notes: session.notes,
+      cancelUrl
     })
 
     if (success) {

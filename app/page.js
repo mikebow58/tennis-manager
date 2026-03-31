@@ -89,7 +89,6 @@ export default async function Dashboard() {
                   <h1 className="text-xl md:text-2xl font-semibold text-white">Dashboard</h1>
                   <p className="text-xs text-slate-300 mt-0.5">Week of {weekLabel}</p>
                 </div>
-                <Link href="/weeks" className="text-xs text-slate-300 hover:text-white mt-1">All weeks</Link>
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">

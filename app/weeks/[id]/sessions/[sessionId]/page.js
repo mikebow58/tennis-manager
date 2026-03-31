@@ -1,6 +1,8 @@
 import { supabase } from '@/lib/supabase'
 import SendReminderButton from '@/app/SendReminderButton'
 
+export const dynamic = 'force-dynamic'
+
 export default async function SessionPage({ params }) {
   const { id, sessionId } = await params
 

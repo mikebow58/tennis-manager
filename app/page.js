@@ -2,6 +2,8 @@ import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import SendSignupButton from './SendSignupButton'
 
+export const dynamic = 'force-dynamic'
+
 export default async function Dashboard() {
   const { data: weeks } = await supabase
     .from('weeks')

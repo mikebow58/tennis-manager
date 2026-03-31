@@ -68,7 +68,8 @@ export default async function Dashboard() {
         month: 'short',
         day: 'numeric',
         hour: 'numeric',
-        minute: '2-digit'
+        minute: '2-digit',
+        timeZone: 'America/Denver'
       })
     : null
 

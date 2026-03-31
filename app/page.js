@@ -192,8 +192,8 @@ export default async function Dashboard() {
                       <span className="text-gray-700 text-xs">{dateLabel}</span>
                       <span className={`text-xs ${session.reminder_sent_at ? 'text-green-600' : 'text-gray-400'}`}>
                         {session.reminder_sent_at
-                          ? `Sent · ${new Date(session.reminder_sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
-                          : 'Not yet sent'}
+  ? `Sent · ${new Date(session.reminder_sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })}`
+  : 'Not yet sent'}
                       </span>
                     </div>
                   )

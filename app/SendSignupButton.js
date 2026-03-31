@@ -36,38 +36,31 @@ export default function SendSignupButton({ weekId, signupSentAt }) {
 
     if (data.success) {
       setSent(true)
-      setResult(`Sent ${data.results.sent} emails · ${data.results.skipped} skipped · ${data.results.failed} failed`)
+      setResult(`Sent ${data.results.sent} · skipped ${data.results.skipped} · failed ${data.results.failed}`)
     } else {
-      setResult('Something went wrong. Check the console.')
+      setResult('Something went wrong.')
     }
   }
 
   if (sent) {
     return (
-      <div className="text-right">
-        <div className="text-xs text-green-600 font-medium">Signup requests sent</div>
-        {sentLabel && (
-          <div className="text-xs text-gray-400">{sentLabel}</div>
-        )}
-        {result && (
-          <div className="text-xs text-gray-400 mt-1">{result}</div>
-        )}
-      </div>
-    )
+    <div className="flex justify-between items-center max-w-xs">
+      <span className="text-xs font-medium text-emerald-400">Signup requests sent</span>
+      <span className="text-xs text-slate-300">{sentLabel}</span>
+    </div>
+  )
   }
 
   return (
-    <div>
+    <div className="flex justify-between items-center">
       <button
         onClick={handleSend}
         disabled={sending}
-        className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50 text-sm font-medium"
+        className="bg-green-600 text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-green-700 disabled:opacity-50"
       >
         {sending ? 'Sending...' : 'Send signup requests'}
       </button>
-      {result && (
-        <p className="text-xs text-gray-500 mt-2">{result}</p>
-      )}
+      {result && <p className="text-xs text-slate-400">{result}</p>}
     </div>
   )
 }

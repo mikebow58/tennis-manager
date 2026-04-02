@@ -92,37 +92,58 @@ export default async function SessionPage({ params }) {
       {availability.length === 0 ? (
         <p className="text-gray-500 text-sm">No players signed up yet.</p>
       ) : (
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="border-b border-gray-200 text-left text-sm text-gray-500">
-  <th className="pb-3 pr-6">Name</th>
-  <th className="pb-3 pr-6">Gender</th>
-  <th className="pb-3 pr-6">Skill</th>
-  <th className="pb-3 pr-6">Type</th>
-  <th className="pb-3 pr-6">Status</th>
-  <th className="pb-3"></th>
-</tr>
-          </thead>
-          <tbody>
-            {availability.map((entry) => (
-  <tr key={entry.id} className="border-b border-gray-100 text-sm hover:bg-gray-50">
-    <td className="py-3 pr-6 font-medium">
-      {entry.players.first_name} {entry.players.last_name}
-    </td>
-    <td className="py-3 pr-6 text-gray-600">{entry.players.gender}</td>
-    <td className="py-3 pr-6 text-gray-600">{entry.players.skill_admin}</td>
-    <td className="py-3 pr-6 text-gray-600 capitalize">{entry.players.player_type}</td>
-    <td className="py-3 text-gray-600 capitalize">{entry.status}</td>
-    <td className="py-3">
+        <div className="md:hidden space-y-2">
+  {availability.map((entry) => (
+    <div key={entry.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-4 py-3">
+      <div>
+        <div className="text-sm font-medium text-gray-900">
+          {entry.players.first_name} {entry.players.last_name}
+        </div>
+        <div className="text-xs text-gray-500 mt-0.5">
+          {entry.players.skill_admin ?? '—'} · {entry.players.gender === 'M' ? 'Male' : entry.players.gender === 'F' ? 'Female' : entry.players.gender} · <span className="capitalize">{entry.players.player_type}</span>
+        </div>
+      </div>
       <RemovePlayerButton
         availabilityId={entry.id}
         playerName={`${entry.players.first_name} ${entry.players.last_name}`}
       />
-    </td>
-  </tr>
-))}
-          </tbody>
-        </table>
+    </div>
+  ))}
+</div>
+
+<div className="hidden md:block overflow-x-auto">
+  <table className="w-full border-collapse">
+    <thead>
+      <tr className="border-b border-gray-200 text-left text-sm text-gray-500">
+        <th className="pb-3 pr-6">Name</th>
+        <th className="pb-3 pr-6">Gender</th>
+        <th className="pb-3 pr-6">Skill</th>
+        <th className="pb-3 pr-6">Type</th>
+        <th className="pb-3 pr-6">Status</th>
+        <th className="pb-3"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {availability.map((entry) => (
+        <tr key={entry.id} className="border-b border-gray-100 text-sm hover:bg-gray-50">
+          <td className="py-3 pr-6 font-medium">
+            {entry.players.first_name} {entry.players.last_name}
+          </td>
+          <td className="py-3 pr-6 text-gray-600">{entry.players.gender}</td>
+          <td className="py-3 pr-6 text-gray-600">{entry.players.skill_admin}</td>
+          <td className="py-3 pr-6 text-gray-600 capitalize">{entry.players.player_type}</td>
+          <td className="py-3 pr-6 text-gray-600 capitalize">{entry.status}</td>
+          <td className="py-3">
+            <RemovePlayerButton
+              availabilityId={entry.id}
+              playerName={`${entry.players.first_name} ${entry.players.last_name}`}
+            />
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
       )}
     </div>
   )

@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import SendSignupButton from './SendSignupButton'
+import { formatTime } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -162,7 +163,7 @@ export default async function Dashboard() {
                       {dateLabel}
                     </div>
                     <div className="text-xs text-gray-400 mb-3">
-                      {session.start_time} · {session.location}
+                      {formatTime(session.start_time)} · {session.location}
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-xs text-gray-400">

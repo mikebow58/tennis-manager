@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { formatTime } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -64,8 +65,8 @@ export default async function WeekPage({ params }) {
                   })}
                 </div>
                 <div className="text-xs text-gray-500 mt-1">
-                  {session.start_time} · {session.location} · {session.court_count} {session.court_count === 1 ? 'court' : 'courts'}
-                </div>
+  {formatTime(session.start_time)} · {session.location} · {session.court_count} {session.court_count === 1 ? 'court' : 'courts'}
+</div>
               </div>
               <div className="flex items-center gap-4">
                 <span className="text-xs text-gray-500 capitalize">{session.status}</span>

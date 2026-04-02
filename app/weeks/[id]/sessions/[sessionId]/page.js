@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import SendReminderButton from '@/app/SendReminderButton'
+import { formatTime } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -49,7 +50,7 @@ export default async function SessionPage({ params }) {
       </div>
 
       <div className="grid grid-cols-2 md:flex md:gap-6 gap-y-2 text-sm text-gray-500 mb-6">
-  <span>{session.start_time ? session.start_time.slice(0, 5) : ''}</span>
+  <span>{formatTime(session.start_time)}</span>
   <span>{session.location}</span>
   <span>{courtCount} {courtCount === 1 ? 'court' : 'courts'}</span>
   <span className="capitalize">{session.format.replace(/_/g, ' ')}</span>

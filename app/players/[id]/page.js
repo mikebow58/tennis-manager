@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import Select from '@/app/components/Select'
 
 export default function EditPlayerPage({ params: paramsPromise }) {
   const params = React.use(paramsPromise)  
@@ -142,20 +143,30 @@ export default function EditPlayerPage({ params: paramsPromise }) {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm text-gray-600 mb-1">Gender</label>
-            <select name="gender" value={form.gender} onChange={handleChange} style={{fontSize: '16px'}} className="w-full border border-gray-300 rounded px-3 py-2">
-              <option value="">Select...</option>
-              <option value="M">Male</option>
-              <option value="F">Female</option>
-              <option value="Other">Other</option>
-            </select>
+            <Select
+  name="gender"
+  value={form.gender}
+  onChange={handleChange}
+  placeholder="Select..."
+  options={[
+    { value: 'M', label: 'Male' },
+    { value: 'F', label: 'Female' },
+    { value: 'Other', label: 'Other' },
+  ]}
+/>
           </div>
           <div>
             <label className="block text-sm text-gray-600 mb-1">Player type</label>
-            <select name="player_type" value={form.player_type} onChange={handleChange} style={{fontSize: '16px'}} className="w-full border border-gray-300 rounded px-3 py-2">
-              <option value="regular">Regular</option>
-              <option value="flex">Flex</option>
-              <option value="sub">Sub only</option>
-            </select>
+            <Select
+  name="player_type"
+  value={form.player_type}
+  onChange={handleChange}
+  options={[
+    { value: 'regular', label: 'Regular' },
+    { value: 'flex', label: 'Flex' },
+    { value: 'sub', label: 'Sub only' },
+  ]}
+/>
           </div>
         </div>
 

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, useParams } from 'next/navigation'
+import Select from '@/app/components/Select'
 
 export default function EditSessionPage() {
   const router = useRouter()
@@ -131,19 +132,29 @@ export default function EditSessionPage() {
 
         <div>
           <label className="block text-sm text-gray-600 mb-1">Play format</label>
-          <select name="format" value={form.format} onChange={handleChange} className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-  <option value="switch_partners">Switch partners</option>
-  <option value="keep_partners">Keep partners</option>
-</select>
+          <Select
+  name="format"
+  value={form.format}
+  onChange={handleChange}
+  options={[
+    { value: 'switch_partners', label: 'Switch partners' },
+    { value: 'keep_partners', label: 'Keep partners' },
+  ]}
+/>
         </div>
 
         <div>
           <label className="block text-sm text-gray-600 mb-1">Status</label>
-          <select name="status" value={form.status} onChange={handleChange} className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-            <option value="open">Open</option>
-            <option value="full">Full</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
+          <Select
+  name="status"
+  value={form.status}
+  onChange={handleChange}
+  options={[
+    { value: 'open', label: 'Open' },
+    { value: 'full', label: 'Full' },
+    { value: 'cancelled', label: 'Cancelled' },
+  ]}
+/>
         </div>
 
         <div>

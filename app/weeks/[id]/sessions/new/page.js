@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, useParams } from 'next/navigation'
+import Select from '@/app/components/Select'
 
 export default function NewSessionPage() {
   const router = useRouter()
@@ -72,10 +73,15 @@ export default function NewSessionPage() {
 
         <div>
   <label className="block text-sm text-gray-600 mb-1">Play format</label>
-  <select name="format" value={form.format} onChange={handleChange} className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
-    <option value="switch_partners">Switch partners</option>
-    <option value="keep_partners">Keep partners</option>
-  </select>
+  <Select
+  name="format"
+  value={form.format}
+  onChange={handleChange}
+  options={[
+    { value: 'switch_partners', label: 'Switch partners' },
+    { value: 'keep_partners', label: 'Keep partners' },
+  ]}
+/>
 </div>
 
         <div>

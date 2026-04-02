@@ -5,7 +5,6 @@ import { supabase } from '@/lib/supabase'
 import { useRouter, useParams } from 'next/navigation'
 import Select from '@/app/components/Select'
 import { getTimeOptions } from '@/lib/utils'
-import Select from '@/app/components/Select'
 
 export default function NewSessionPage() {
   const router = useRouter()

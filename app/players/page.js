@@ -21,20 +21,18 @@ export default async function PlayersPage() {
       </div>
 
       <div className="md:hidden space-y-2">
-        {players.map((player) => (
-          <a key={player.id} href={`/players/${player.id}`} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50">
-            <div>
-              <div className="font-medium text-sm text-gray-900">{player.first_name} {player.last_name}</div>
-              <div className="text-xs text-gray-500 mt-0.5 capitalize">{player.player_type} · {player.active ? 'Active' : 'Inactive'}</div>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-gray-500">{player.gender}</span>
-              <span className="text-sm font-medium text-gray-700">{player.skill_admin ?? '—'}</span>
-              <span className="text-gray-400 text-sm">›</span>
-            </div>
-          </a>
-        ))}
+  {players.map((player) => (
+    <a key={player.id} href={`/players/${player.id}`} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50">
+      <div>
+        <div className="font-medium text-sm text-blue-600">{player.first_name} {player.last_name}</div>
+        <div className="text-xs text-gray-500 mt-0.5 capitalize">{player.player_type} · {player.active ? 'Active' : 'Inactive'}</div>
       </div>
+      <div className="flex items-center gap-3">
+        <span className="text-sm text-gray-600">{player.skill_admin ?? '—'} · {player.gender === 'M' ? 'Male' : player.gender === 'F' ? 'Female' : player.gender}</span>
+      </div>
+    </a>
+  ))}
+</div>
 
       <div className="hidden md:block overflow-x-auto">
         <table className="w-full border-collapse">

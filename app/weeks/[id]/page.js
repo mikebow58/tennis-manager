@@ -69,9 +69,8 @@ export default async function WeekPage({ params }) {
 </div>
               </div>
               <div className="flex items-center gap-4">
-                <span className="text-xs text-gray-500 capitalize">{session.status}</span>
-                <a href={`/weeks/${id}/sessions/${session.id}`} className="text-sm text-blue-600 hover:underline">Manage</a>
-              </div>
+  <a href={`/weeks/${id}/sessions/${session.id}`} className="text-sm text-blue-600 hover:underline">Manage</a>
+</div>
             </div>
           ))}
         </div>

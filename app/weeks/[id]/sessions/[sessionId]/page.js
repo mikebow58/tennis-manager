@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import SendReminderButton from '@/app/SendReminderButton'
 import { formatTime } from '@/lib/utils'
+import RemovePlayerButton from './RemovePlayerButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -94,25 +95,32 @@ export default async function SessionPage({ params }) {
         <table className="w-full border-collapse">
           <thead>
             <tr className="border-b border-gray-200 text-left text-sm text-gray-500">
-              <th className="pb-3 pr-6">Name</th>
-              <th className="pb-3 pr-6">Gender</th>
-              <th className="pb-3 pr-6">Skill</th>
-              <th className="pb-3 pr-6">Type</th>
-              <th className="pb-3">Status</th>
-            </tr>
+  <th className="pb-3 pr-6">Name</th>
+  <th className="pb-3 pr-6">Gender</th>
+  <th className="pb-3 pr-6">Skill</th>
+  <th className="pb-3 pr-6">Type</th>
+  <th className="pb-3 pr-6">Status</th>
+  <th className="pb-3"></th>
+</tr>
           </thead>
           <tbody>
             {availability.map((entry) => (
-              <tr key={entry.id} className="border-b border-gray-100 text-sm hover:bg-gray-50">
-                <td className="py-3 pr-6 font-medium">
-                  {entry.players.first_name} {entry.players.last_name}
-                </td>
-                <td className="py-3 pr-6 text-gray-600">{entry.players.gender}</td>
-                <td className="py-3 pr-6 text-gray-600">{entry.players.skill_admin}</td>
-                <td className="py-3 pr-6 text-gray-600 capitalize">{entry.players.player_type}</td>
-                <td className="py-3 text-gray-600 capitalize">{entry.status}</td>
-              </tr>
-            ))}
+  <tr key={entry.id} className="border-b border-gray-100 text-sm hover:bg-gray-50">
+    <td className="py-3 pr-6 font-medium">
+      {entry.players.first_name} {entry.players.last_name}
+    </td>
+    <td className="py-3 pr-6 text-gray-600">{entry.players.gender}</td>
+    <td className="py-3 pr-6 text-gray-600">{entry.players.skill_admin}</td>
+    <td className="py-3 pr-6 text-gray-600 capitalize">{entry.players.player_type}</td>
+    <td className="py-3 text-gray-600 capitalize">{entry.status}</td>
+    <td className="py-3">
+      <RemovePlayerButton
+        availabilityId={entry.id}
+        playerName={`${entry.players.first_name} ${entry.players.last_name}`}
+      />
+    </td>
+  </tr>
+))}
           </tbody>
         </table>
       )}

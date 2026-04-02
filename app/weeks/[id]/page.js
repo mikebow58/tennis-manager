@@ -39,7 +39,6 @@ export default async function WeekPage({ params }) {
     <div className="p-8">
       <div className="flex justify-between items-center mb-2">
         <h1 className="text-2xl font-semibold">Week of {weekLabel}</h1>
-        <a href="/weeks" className="text-sm text-gray-500 hover:text-gray-700">All weeks</a>
       </div>
 
       <p className="text-sm text-gray-500 capitalize mb-8">Status: {week.status}</p>

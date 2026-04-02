@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter, useParams } from 'next/navigation'
 import Select from '@/app/components/Select'
+import { getTimeOptions } from '@/lib/utils'
+import Select from '@/app/components/Select'
 
 export default function EditSessionPage() {
   const router = useRouter()
@@ -116,9 +118,15 @@ export default function EditSessionPage() {
         </div>
 
         <div>
-          <label className="block text-sm text-gray-600 mb-1">Start time</label>
-          <input type="time" name="start_time" value={form.start_time} onChange={handleChange} required className="w-full border border-gray-300 rounded px-3 py-2 text-sm" />
-        </div>
+  <label className="block text-sm text-gray-600 mb-1">Start time</label>
+  <Select
+    name="start_time"
+    value={form.start_time}
+    onChange={handleChange}
+    options={getTimeOptions()}
+    placeholder="Select time..."
+  />
+</div>
 
         <div>
           <label className="block text-sm text-gray-600 mb-1">Location</label>

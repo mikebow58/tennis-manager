@@ -21,9 +21,9 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <nav className="border-b border-gray-200 px-8 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-8">
-            <span className="font-semibold text-gray-900">Treviso Racquet Club</span>
+        <nav className="border-b border-gray-200 px-4 md:px-8 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-4 md:gap-8">
+            <span className="font-semibold text-gray-900 text-sm md:text-base">TRC</span>
             <a href="/" className="text-sm text-gray-600 hover:text-gray-900">Dashboard</a>
             <a href="/players" className="text-sm text-gray-600 hover:text-gray-900">Players</a>
             <a href="/weeks" className="text-sm text-gray-600 hover:text-gray-900">Weeks</a>

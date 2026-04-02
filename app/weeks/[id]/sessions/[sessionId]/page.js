@@ -48,13 +48,13 @@ export default async function SessionPage({ params }) {
         <a href={`/weeks/${id}`} className="text-sm text-gray-500 hover:text-gray-700">Back to week</a>
       </div>
 
-      <div className="flex gap-6 text-sm text-gray-500 mb-8">
-        <span>{session.start_time}</span>
-        <span>{session.location}</span>
-        <span>{courtCount} {courtCount === 1 ? 'court' : 'courts'}</span>
-        <span className="capitalize">{session.format.replace(/_/g, ' ')}</span>
-        <a href={`/weeks/${id}/sessions/${sessionId}/edit`} className="text-blue-600 hover:underline">Edit</a>
-      </div>
+      <div className="grid grid-cols-2 md:flex md:gap-6 gap-y-2 text-sm text-gray-500 mb-6">
+  <span>{session.start_time ? session.start_time.slice(0, 5) : ''}</span>
+  <span>{session.location}</span>
+  <span>{courtCount} {courtCount === 1 ? 'court' : 'courts'}</span>
+  <span className="capitalize">{session.format.replace(/_/g, ' ')}</span>
+  <a href={`/weeks/${id}/sessions/${sessionId}/edit`} className="text-blue-600 hover:underline col-span-2 md:col-span-1">Edit</a>
+</div>
 
       {session.notes && (
         <div className="bg-amber-50 border border-amber-200 rounded px-4 py-3 text-sm text-amber-800 mb-6">

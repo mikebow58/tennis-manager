@@ -82,7 +82,7 @@ export default function NewPlayerPage() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm text-gray-600 mb-1">Gender</label>
-            <select name="gender" value={form.gender} onChange={handleChange} className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
+            <select name="gender" value={form.gender} onChange={handleChange} className="w-full border border-gray-300 rounded px-3 py-2 text-base md:text-sm">
               <option value="">Select...</option>
               <option value="M">Male</option>
               <option value="F">Female</option>
@@ -91,7 +91,7 @@ export default function NewPlayerPage() {
           </div>
           <div>
             <label className="block text-sm text-gray-600 mb-1">Player type</label>
-            <select name="player_type" value={form.player_type} onChange={handleChange} className="w-full border border-gray-300 rounded px-3 py-2 text-sm">
+            <select name="player_type" value={form.player_type} onChange={handleChange} className="w-full border border-gray-300 rounded px-3 py-2 text-base md:text-sm">
               <option value="regular">Regular</option>
               <option value="flex">Flex</option>
               <option value="sub">Sub only</option>

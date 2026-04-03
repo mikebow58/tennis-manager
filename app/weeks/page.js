@@ -33,9 +33,9 @@ export default async function WeeksPage() {
         ) : (
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
             {weeks.map((week, index) => (
-              
+              <a
                 key={week.id}
-                <a href={`/weeks/${week.id}`}
+               href={`/weeks/${week.id}`}
                 className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50 ${index !== weeks.length - 1 ? 'border-b border-gray-100' : ''}`}
               >
                 <div>

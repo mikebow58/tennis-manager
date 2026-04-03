@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase'
-import SendReminderButton from './SendReminderButton'
+import SendReminderButton from '@/app/SendReminderButton'
 import RemovePlayerButton from './RemovePlayerButton'
 import { formatTime } from '@/lib/utils'
 
@@ -142,7 +142,7 @@ export default async function SessionPage({ params }) {
 
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <div className="bg-gray-50 border-b border-gray-200 px-4 py-3 flex justify-between items-center">
-            <span className="text-sm font-medium text-gray-900">Reminders & notes</span>
+            <span className="text-sm font-medium text-gray-900">Reminders & Notes</span>
             <a href={`/weeks/${id}/sessions/${sessionId}/edit`} className="text-xs text-blue-600 hover:underline">Edit</a>
           </div>
           <div className="px-4 py-3 space-y-3">

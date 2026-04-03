@@ -36,44 +36,49 @@ export default async function WeekPage({ params }) {
   })
 
   return (
-    <div className="p-8">
-      <div className="flex justify-between items-center mb-2">
-        <h1 className="text-2xl font-semibold">Week of {weekLabel}</h1>
-      </div>
-
-      <p className="text-sm text-gray-500 capitalize mb-8">Status: {week.status}</p>
-
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-lg font-medium">Sessions</h2>
-        <a href={`/weeks/${id}/sessions/new`} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Add session</a>
-      </div>
-
-      {sessions.length === 0 ? (
-        <p className="text-gray-500 text-sm">No sessions yet. Add the play days for this week.</p>
-      ) : (
-        <div className="space-y-3">
-          {sessions.map((session) => (
-            <div key={session.id} className="border border-gray-200 rounded-lg p-4 flex justify-between items-center hover:bg-gray-50">
-              <div>
-                <div className="font-medium text-sm">
-                  {new Date(session.session_date).toLocaleDateString('en-US', {
-                    weekday: 'long',
-                    month: 'long',
-                    day: 'numeric',
-                    timeZone: 'UTC'
-                  })}
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-  {formatTime(session.start_time)} · {session.location} · {session.court_count} {session.court_count === 1 ? 'court' : 'courts'}
-</div>
-              </div>
-              <div className="flex items-center gap-4">
-  <a href={`/weeks/${id}/sessions/${session.id}`} className="text-sm text-blue-600 hover:underline">Manage</a>
-</div>
+    <div className="min-h-screen bg-[#f1efe9]">
+      <div className="bg-[#0f172a] px-4 md:px-8 py-5">
+        <div className="max-w-3xl mx-auto">
+          <a href="/weeks" className="text-xs text-slate-400 hover:text-slate-200 mb-2 inline-block">← Weeks</a>
+          <div className="flex justify-between items-start">
+            <div>
+              <h1 className="text-xl font-semibold text-white">Week of {weekLabel}</h1>
+              <p className="text-xs text-slate-300 mt-0.5 capitalize">Status: {week.status}</p>
             </div>
-          ))}
+            <a href={`/weeks/${id}/sessions/new`} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium">Add session</a>
+          </div>
         </div>
-      )}
+      </div>
+
+      <div className="px-4 md:px-8 py-4 max-w-3xl mx-auto">
+        {sessions.length === 0 ? (
+          <div className="bg-white border border-gray-200 rounded-xl px-4 py-8 text-center text-sm text-gray-400">
+            No sessions yet. Add the play days for this week.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {sessions.map((session) => {
+              const dateLabel = new Date(session.session_date).toLocaleDateString('en-US', {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric',
+                timeZone: 'UTC'
+              })
+              return (
+                <div key={session.id} className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex justify-between items-center">
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">{dateLabel}</div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {formatTime(session.start_time)} · {session.location} · {session.court_count} {session.court_count === 1 ? 'court' : 'courts'}
+                    </div>
+                  </div>
+                  <a href={`/weeks/${id}/sessions/${session.id}`} className="text-sm text-blue-600 hover:underline ml-4">Manage</a>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

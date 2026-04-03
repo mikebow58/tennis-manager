@@ -14,38 +14,47 @@ export default async function WeeksPage() {
   }
 
   return (
-    <div className="p-8">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-semibold">Weeks</h1>
-        <a href="/weeks/new" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">New week</a>
+    <div className="min-h-screen bg-[#f1efe9]">
+      <div className="bg-[#0f172a] px-4 md:px-8 py-5">
+        <div className="max-w-3xl mx-auto flex justify-between items-center">
+          <div>
+            <h1 className="text-xl font-semibold text-white">Weeks</h1>
+            <p className="text-xs text-slate-300 mt-0.5">{weeks.length} total</p>
+          </div>
+          <a href="/weeks/new" className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium">New week</a>
+        </div>
       </div>
 
-      {weeks.length === 0 ? (
-        <p className="text-gray-500">No weeks yet. Create your first week to get started.</p>
-      ) : (
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="border-b border-gray-200 text-left text-sm text-gray-500">
-              <th className="pb-3 pr-6">Week of</th>
-              <th className="pb-3 pr-6">Status</th>
-              <th className="pb-3">Sessions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {weeks.map((week) => (
-              <tr key={week.id} className="border-b border-gray-100 text-sm hover:bg-gray-50">
-                <td className="py-3 pr-6 font-medium">
-                  <a href={`/weeks/${week.id}`} className="text-blue-600 hover:underline">
-                    {new Date(week.start_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}
-                  </a>
-                </td>
-                <td className="py-3 pr-6 text-gray-600 capitalize">{week.status}</td>
-                <td className="py-3 text-gray-600">—</td>
-              </tr>
+      <div className="px-4 md:px-8 py-4 max-w-3xl mx-auto">
+        {weeks.length === 0 ? (
+          <div className="bg-white border border-gray-200 rounded-xl px-4 py-8 text-center text-sm text-gray-400">
+            No weeks yet. Create your first week to get started.
+          </div>
+        ) : (
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            {weeks.map((week, index) => (
+              
+                key={week.id}
+                href={`/weeks/${week.id}`}
+                className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50 ${index !== weeks.length - 1 ? 'border-b border-gray-100' : ''}`}
+              >
+                <div>
+                  <div className="text-sm font-medium text-blue-600">
+                    {new Date(week.start_date).toLocaleDateString('en-US', {
+                      month: 'long',
+                      day: 'numeric',
+                      year: 'numeric',
+                      timeZone: 'UTC'
+                    })}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5 capitalize">{week.status}</div>
+                </div>
+                <span className="text-gray-400 text-sm">›</span>
+              </a>
             ))}
-          </tbody>
-        </table>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

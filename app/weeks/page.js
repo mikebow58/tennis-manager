@@ -14,7 +14,7 @@ export default async function WeeksPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f1efe9]">
+   <div className="min-h-screen bg-[#f1efe9]">
       <div className="bg-[#0f172a] px-4 md:px-8 py-5">
         <div className="max-w-3xl mx-auto flex justify-between items-center">
           <div>
@@ -35,7 +35,7 @@ export default async function WeeksPage() {
             {weeks.map((week, index) => (
               
                 key={week.id}
-                href={`/weeks/${week.id}`}
+                <a href={`/weeks/${week.id}`}
                 className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50 ${index !== weeks.length - 1 ? 'border-b border-gray-100' : ''}`}
               >
                 <div>
@@ -56,5 +56,6 @@ export default async function WeeksPage() {
         )}
       </div>
     </div>
+    
   )
 }

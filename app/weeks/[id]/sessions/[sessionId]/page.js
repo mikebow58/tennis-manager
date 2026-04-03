@@ -1,7 +1,7 @@
 import { supabase } from '@/lib/supabase'
-import SendReminderButton from '@/app/SendReminderButton'
-import { formatTime } from '@/lib/utils'
+import SendReminderButton from './SendReminderButton'
 import RemovePlayerButton from './RemovePlayerButton'
+import { formatTime } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,115 +38,136 @@ export default async function SessionPage({ params }) {
     timeZone: 'UTC'
   })
 
+  const shortLabel = new Date(session.session_date).toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC'
+  })
+
   const playerCount = availability.length
   const courtCount = session.court_count
   const spotsNeeded = (Math.ceil(playerCount / 4) * 4) - playerCount
   const isFull = playerCount > 0 && playerCount % 4 === 0
 
+  const reminderSentLabel = session.reminder_sent_at
+    ? new Date(session.reminder_sent_at).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZone: 'America/Denver'
+      })
+    : null
+
   return (
-    <div className="p-8 max-w-3xl">
-      <div className="flex justify-between items-center mb-2">
-        <h1 className="text-2xl font-semibold">{sessionLabel}</h1>
-        <a href={`/weeks/${id}`} className="text-sm text-gray-500 hover:text-gray-700">Back to week</a>
-      </div>
-
-      <div className="grid grid-cols-2 md:flex md:gap-6 gap-y-2 text-sm text-gray-500 mb-6">
-  <span>{formatTime(session.start_time)}</span>
-  <span>{session.location}</span>
-  <span>{courtCount} {courtCount === 1 ? 'court' : 'courts'}</span>
-  <span className="capitalize">{session.format.replace(/_/g, ' ')}</span>
-  <a href={`/weeks/${id}/sessions/${sessionId}/edit`} className="text-blue-600 hover:underline col-span-2 md:col-span-1">Edit</a>
-</div>
-
-      {session.notes && (
-        <div className="bg-amber-50 border border-amber-200 rounded px-4 py-3 text-sm text-amber-800 mb-6">
-          {session.notes}
-        </div>
-      )}
-
-      <div className="mb-4">
-  <div className="flex justify-between items-center mb-2">
-    <h2 className="text-lg font-medium">Players</h2>
-    <a href={`/weeks/${id}/sessions/${sessionId}/add-player`} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Add player</a>
-  </div>
-  <div className="flex flex-wrap justify-between items-center gap-2">
-    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-      isFull
-        ? 'bg-green-100 text-green-700'
-        : playerCount === 0
-        ? 'bg-gray-100 text-gray-500'
-        : 'bg-amber-100 text-amber-700'
-    }`}>
-      {playerCount} signed up
-      {!isFull && playerCount > 0 && ` · needs ${spotsNeeded} more`}
-      {isFull && ' · full'}
-    </span>
-    <SendReminderButton
-      sessionId={sessionId}
-      reminderSentAt={session.reminder_sent_at}
-      playerCount={playerCount}
-    />
-  </div>
-</div>
-
-      {availability.length === 0 ? (
-        <p className="text-gray-500 text-sm">No players signed up yet.</p>
-      ) : (
-        <>
-        <div className="md:hidden space-y-2">
-  {availability.map((entry) => (
-    <div key={entry.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-4 py-3">
-      <div>
-        <div className="text-sm font-medium text-gray-900">
-          {entry.players.first_name} {entry.players.last_name}
-        </div>
-        <div className="text-xs text-gray-500 mt-0.5">
-          {entry.players.skill_admin ?? '—'} · {entry.players.gender === 'M' ? 'Male' : entry.players.gender === 'F' ? 'Female' : entry.players.gender} · <span className="capitalize">{entry.players.player_type}</span>
+    <div className="min-h-screen bg-[#f1efe9]">
+      <div className="bg-[#0f172a] px-4 md:px-8 py-5">
+        <div className="max-w-3xl mx-auto">
+          <a href={`/weeks/${id}`} className="text-xs text-slate-400 hover:text-slate-200 mb-2 inline-block">← Back to week</a>
+          <h1 className="text-xl font-semibold text-white">{shortLabel}</h1>
+          <p className="text-xs text-slate-300 mt-0.5">Week of {new Date(session.session_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}</p>
         </div>
       </div>
-      <RemovePlayerButton
-        availabilityId={entry.id}
-        playerName={`${entry.players.first_name} ${entry.players.last_name}`}
-      />
-    </div>
-  ))}
-</div>
 
-<div className="hidden md:block overflow-x-auto">
-  <table className="w-full border-collapse">
-    <thead>
-      <tr className="border-b border-gray-200 text-left text-sm text-gray-500">
-        <th className="pb-3 pr-6">Name</th>
-        <th className="pb-3 pr-6">Gender</th>
-        <th className="pb-3 pr-6">Skill</th>
-        <th className="pb-3 pr-6">Type</th>
-        <th className="pb-3 pr-6">Status</th>
-        <th className="pb-3"></th>
-      </tr>
-    </thead>
-    <tbody>
-      {availability.map((entry) => (
-        <tr key={entry.id} className="border-b border-gray-100 text-sm hover:bg-gray-50">
-          <td className="py-3 pr-6 font-medium">
-            {entry.players.first_name} {entry.players.last_name}
-          </td>
-          <td className="py-3 pr-6 text-gray-600">{entry.players.gender}</td>
-          <td className="py-3 pr-6 text-gray-600">{entry.players.skill_admin}</td>
-          <td className="py-3 pr-6 text-gray-600 capitalize">{entry.players.player_type}</td>
-          <td className="py-3 pr-6 text-gray-600 capitalize">{entry.status}</td>
-          <td className="py-3">
-            <RemovePlayerButton
-              availabilityId={entry.id}
-              playerName={`${entry.players.first_name} ${entry.players.last_name}`}
-            />
-          </td>
-        </tr>
-      ))}
-    </tbody>
-  </table>
-</div>
-</>
-      )}
+      <div className="px-4 md:px-8 py-4 max-w-3xl mx-auto space-y-4">
+
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="bg-gray-50 border-b border-gray-200 px-4 py-3 flex justify-between items-center">
+            <span className="text-sm font-medium text-gray-900">Session info</span>
+            <a href={`/weeks/${id}/sessions/${sessionId}/edit`} className="text-xs text-blue-600 hover:underline">Edit</a>
+          </div>
+          <div className="px-4 py-3 grid grid-cols-2 gap-y-2">
+            <div>
+              <div className="text-xs text-gray-500">Time</div>
+              <div className="text-sm font-medium text-gray-900">{formatTime(session.start_time)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Location</div>
+              <div className="text-sm font-medium text-gray-900">{session.location}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Courts</div>
+              <div className="text-sm font-medium text-gray-900">{courtCount}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Format</div>
+              <div className="text-sm font-medium text-gray-900 capitalize">{session.format.replace(/_/g, ' ')}</div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div className="flex justify-between items-center mb-2">
+            <div className="flex items-center gap-3">
+              <h2 className="text-sm font-medium text-gray-900">Players</h2>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                isFull ? 'bg-green-100 text-green-700' :
+                playerCount === 0 ? 'bg-gray-100 text-gray-500' :
+                'bg-amber-100 text-amber-700'
+              }`}>
+                {playerCount} signed up
+                {!isFull && playerCount > 0 && ` · needs ${spotsNeeded} more`}
+                {isFull && ' · full'}
+              </span>
+            </div>
+            <a href={`/weeks/${id}/sessions/${sessionId}/add-player`} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 text-xs font-medium">Add player</a>
+          </div>
+
+          {availability.length === 0 ? (
+            <div className="bg-white border border-gray-200 rounded-xl px-4 py-6 text-center text-sm text-gray-400">
+              No players signed up yet.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {availability.map((entry) => (
+                <div key={entry.id} className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">
+                      {entry.players.last_name}, {entry.players.first_name}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {entry.players.skill_admin ?? '—'} · {entry.players.gender === 'M' ? 'Male' : entry.players.gender === 'F' ? 'Female' : entry.players.gender} · <span className="capitalize">{entry.players.player_type}</span>
+                    </div>
+                  </div>
+                  <RemovePlayerButton
+                    availabilityId={entry.id}
+                    playerName={`${entry.players.first_name} ${entry.players.last_name}`}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="bg-gray-50 border-b border-gray-200 px-4 py-3 flex justify-between items-center">
+            <span className="text-sm font-medium text-gray-900">Reminders & notes</span>
+            <a href={`/weeks/${id}/sessions/${sessionId}/edit`} className="text-xs text-blue-600 hover:underline">Edit</a>
+          </div>
+          <div className="px-4 py-3 space-y-3">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-gray-500">Reminder</span>
+              {reminderSentLabel ? (
+                <span className="text-xs text-green-600 font-medium">Sent · {reminderSentLabel}</span>
+              ) : (
+                <SendReminderButton
+                  sessionId={sessionId}
+                  reminderSentAt={session.reminder_sent_at}
+                  playerCount={playerCount}
+                />
+              )}
+            </div>
+            {session.notes && (
+              <div className="flex justify-between items-start gap-4">
+                <span className="text-xs text-gray-500 flex-shrink-0">Note</span>
+                <span className="text-xs text-gray-600 italic text-right">{session.notes}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+      </div>
     </div>
   )
 }

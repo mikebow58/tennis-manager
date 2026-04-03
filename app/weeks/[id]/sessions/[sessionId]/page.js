@@ -92,6 +92,7 @@ export default async function SessionPage({ params }) {
       {availability.length === 0 ? (
         <p className="text-gray-500 text-sm">No players signed up yet.</p>
       ) : (
+        <>
         <div className="md:hidden space-y-2">
   {availability.map((entry) => (
     <div key={entry.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-lg px-4 py-3">
@@ -144,6 +145,7 @@ export default async function SessionPage({ params }) {
     </tbody>
   </table>
 </div>
+</>
       )}
     </div>
   )

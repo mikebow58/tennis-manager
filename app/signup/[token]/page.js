@@ -12,23 +12,23 @@ export default async function SignupPage({ params }) {
 
   if (playerError || !player) {
     return (
-      <div className="p-8 max-w-md mx-auto">
+      <div className="max-w-md mx-auto p-8 text-center">
         <p className="text-gray-500">This signup link is invalid or has expired.</p>
       </div>
     )
   }
 
-const today = new Date()
-today.setHours(0, 0, 0, 0)
-const todayStr = today.toISOString().split('T')[0]
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const todayStr = today.toISOString().split('T')[0]
 
-const { data: allSessions, error: sessionsError } = await supabase
-  .from('sessions')
-  .select('*, weeks!inner(status)')
-  .eq('weeks.status', 'open')
-  .gte('session_date', todayStr)
-  .is('reminder_sent_at', null)
-  .order('session_date', { ascending: true })
+  const { data: openSessions, error: sessionsError } = await supabase
+    .from('sessions')
+    .select('*, weeks!inner(status)')
+    .eq('weeks.status', 'open')
+    .gte('session_date', todayStr)
+    .is('reminder_sent_at', null)
+    .order('session_date', { ascending: true })
 
   if (sessionsError) {
     console.error(sessionsError)
@@ -56,7 +56,7 @@ const { data: allSessions, error: sessionsError } = await supabase
 
       <SignupForm
         player={player}
-        sessions={sessions}
+        sessions={openSessions || []}
         signedUpSessionIds={signedUpSessionIds}
       />
     </div>

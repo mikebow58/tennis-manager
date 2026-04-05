@@ -18,11 +18,16 @@ export default async function SignupPage({ params }) {
     )
   }
 
-  const { data: sessions, error: sessionsError } = await supabase
-    .from('sessions')
-    .select('*, weeks!inner(status)')
-    .eq('weeks.status', 'open')
-    .order('session_date', { ascending: true })
+  const today = new Date()
+today.setHours(0, 0, 0, 0)
+const todayStr = today.toISOString().split('T')[0]
+
+const { data: sessions, error: sessionsError } = await supabase
+  .from('sessions')
+  .select('*, weeks!inner(status)')
+  .eq('weeks.status', 'open')
+  .gte('session_date', todayStr)
+  .order('session_date', { ascending: true })
 
   if (sessionsError) {
     console.error(sessionsError)

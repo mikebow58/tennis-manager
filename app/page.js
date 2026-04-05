@@ -10,28 +10,25 @@ export default async function Dashboard({ searchParams }) {
   const viewNext = sp?.view === 'next'
 
   const today = new Date()
-  today.setHours(0, 0, 0, 0)
-
-  const { data: weeks } = await supabase
-    .from('weeks')
-    .select('*')
-    .eq('status', 'open')
-    .order('start_date', { ascending: true })
-
-
 today.setHours(0, 0, 0, 0)
+const todayStr = today.toISOString().split('T')[0]
 
-const { data: allSessions } = await supabase
-  .from('sessions')
-  .select('week_id, session_date')
-  .in('week_id', weeks?.map(w => w.id) || [])
+let allSessionsForWeeks = []
+if (weeks && weeks.length > 0) {
+  const { data: weekSessions } = await supabase
+    .from('sessions')
+    .select('week_id, session_date')
+    .in('week_id', weeks.map(w => w.id))
+  allSessionsForWeeks = weekSessions || []
+}
 
 const currentWeek = weeks?.find(w => {
   const start = new Date(w.start_date + 'T00:00:00')
   const end = new Date(start)
   end.setDate(end.getDate() + 6)
   if (today < start || today > end) return false
-  const weekSessions = allSessions?.filter(s => s.week_id === w.id) || []
+  const weekSessions = allSessionsForWeeks.filter(s => s.week_id === w.id)
+  if (weekSessions.length === 0) return true
   return weekSessions.some(s => !isSessionCompleted(s.session_date))
 })
 
@@ -53,8 +50,8 @@ if (viewNext && nextWeek) {
   week = weeks[weeks.length - 1]
 }
 
-const showingNext = viewNext && nextWeek
-const canToggle = currentWeek && nextWeek
+const showingNext = !!(viewNext && nextWeek)
+const canToggle = !!(currentWeek && nextWeek)
 
   let sessions = []
   let sessionIds = []

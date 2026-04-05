@@ -1,7 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import SendReminderButton from '@/app/SendReminderButton'
 import RemovePlayerButton from './RemovePlayerButton'
-import { formatTime } from '@/lib/utils'
+import { formatTime, getSkillLabel } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -127,7 +127,7 @@ export default async function SessionPage({ params }) {
                       {entry.players.last_name}, {entry.players.first_name}
                     </div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      {entry.players.skill_admin ?? '—'} · {entry.players.gender === 'M' ? 'Male' : entry.players.gender === 'F' ? 'Female' : entry.players.gender} · <span className="capitalize">{entry.players.player_type}</span>
+                      {getSkillLabel(entry.players.skill_admin)} · {entry.players.gender === 'M' ? 'Male' : entry.players.gender === 'F' ? 'Female' : entry.players.gender} · <span className="capitalize">{entry.players.player_type}</span>
                     </div>
                   </div>
                   <RemovePlayerButton

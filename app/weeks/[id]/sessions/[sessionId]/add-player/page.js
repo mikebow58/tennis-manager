@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useParams } from 'next/navigation'
+import { getSkillLabel } from '@/lib/utils'
 
 export default function AddPlayerToSessionPage() {
   const params = useParams()
@@ -109,7 +110,7 @@ export default function AddPlayerToSessionPage() {
                       {player.last_name}, {player.first_name}
                     </div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      {player.skill_admin ?? '—'} · {player.gender === 'M' ? 'Male' : player.gender === 'F' ? 'Female' : player.gender} · <span className="capitalize">{player.player_type}</span>
+                      {getSkillLabel(player.skill_admin)} · {player.gender === 'M' ? 'Male' : player.gender === 'F' ? 'Female' : player.gender} · <span className="capitalize">{player.player_type}</span>
                     </div>
                   </div>
                   <button

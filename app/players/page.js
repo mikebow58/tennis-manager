@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { getSkillLabel } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,7 +39,7 @@ export default async function PlayersPage() {
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-sm font-medium text-gray-800">{player.skill_admin ?? '—'}</div>
+                <div className="text-sm font-medium text-gray-800">{getSkillLabel(player.skill_admin)}</div>
                 <div className="text-xs text-gray-500">
                   {player.gender === 'M' ? 'Male' : player.gender === 'F' ? 'Female' : player.gender}
                 </div>
@@ -69,7 +70,7 @@ export default async function PlayersPage() {
                   </td>
                   <td className="px-6 py-3 text-gray-600">{player.mobile}</td>
                   <td className="px-6 py-3 text-gray-600">{player.gender}</td>
-                  <td className="px-6 py-3 text-gray-600">{player.skill_admin}</td>
+                  <td className="px-6 py-3 text-gray-600">{getSkillLabel(player.skill_admin)}</td>
                   <td className="px-6 py-3 text-gray-600 capitalize">{player.player_type}</td>
                   <td className="px-6 py-3 text-gray-600">{player.active ? 'Yes' : 'No'}</td>
                 </tr>

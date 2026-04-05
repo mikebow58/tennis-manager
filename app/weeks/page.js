@@ -32,22 +32,38 @@ export default async function WeeksPage() {
           </div>
         ) : (
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-            {weeks.map((week, index) => (
-              <a key={week.id} href={`/weeks/${week.id}`} className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50 ${index !== weeks.length - 1 ? 'border-b border-gray-100' : ''}`}>
-                <div>
-                  <div className="text-sm font-medium text-blue-600">
-                    {new Date(week.start_date).toLocaleDateString('en-US', {
-                      month: 'long',
-                      day: 'numeric',
-                      year: 'numeric',
-                      timeZone: 'UTC'
-                    })}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-0.5 capitalize">{week.status}</div>
-                </div>
-                <span className="text-gray-400 text-sm">›</span>
-              </a>
-            ))}
+            {weeks.map((week, index) => {
+  const start = new Date(week.start_date + 'T00:00:00')
+  const end = new Date(start)
+  end.setDate(end.getDate() + 6)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const isCompleted = end < today
+
+  return (
+    <a key={week.id} href={`/weeks/${week.id}`} className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50 ${index !== weeks.length - 1 ? 'border-b border-gray-100' : ''}`}>
+      <div>
+        <div className={`text-sm font-medium ${isCompleted ? 'text-gray-400' : 'text-blue-600'}`}>
+          {new Date(week.start_date).toLocaleDateString('en-US', {
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric',
+            timeZone: 'UTC'
+          })}
+        </div>
+        <div className="text-xs text-gray-500 mt-0.5 capitalize">
+          {isCompleted ? 'Completed' : week.status}
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {isCompleted && (
+          <span className="text-xs bg-gray-100 text-gray-400 px-2 py-0.5 rounded-full">Completed</span>
+        )}
+        <span className="text-gray-400 text-sm">›</span>
+      </div>
+    </a>
+  )
+})}
           </div>
         )}
       </div>

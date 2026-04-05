@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { generateToken } from '@/lib/tokens'
 import Select from '@/app/components/Select'
+import { getSkillOptions } from '@/lib/utils'
 
 export default function NewPlayerPage() {
   const router = useRouter()
@@ -108,9 +109,15 @@ export default function NewPlayerPage() {
                 <input name="skill_self" value={form.skill_self} onChange={handleChange} type="number" min="1" max="7" step="0.5" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
               </div>
               <div>
-                <label className="block text-sm text-gray-600 mb-1">Skill (admin rating)</label>
-                <input name="skill_admin" value={form.skill_admin} onChange={handleChange} type="number" min="1" max="10" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
-              </div>
+  <label className="block text-sm text-gray-600 mb-1">Skill (admin rating)</label>
+  <Select
+    name="skill_admin"
+    value={String(form.skill_admin)}
+    onChange={handleChange}
+    placeholder="Select rating..."
+    options={getSkillOptions()}
+  />
+</div>
             </div>
             <div>
               <label className="block text-sm text-gray-600 mb-1">Notes</label>

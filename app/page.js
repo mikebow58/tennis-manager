@@ -10,48 +10,53 @@ export default async function Dashboard({ searchParams }) {
   const viewNext = sp?.view === 'next'
 
   const today = new Date()
-today.setHours(0, 0, 0, 0)
-const todayStr = today.toISOString().split('T')[0]
+  today.setHours(0, 0, 0, 0)
 
-let allSessionsForWeeks = []
-if (weeks && weeks.length > 0) {
-  const { data: weekSessions } = await supabase
-    .from('sessions')
-    .select('week_id, session_date')
-    .in('week_id', weeks.map(w => w.id))
-  allSessionsForWeeks = weekSessions || []
-}
+  const { data: weeks } = await supabase
+    .from('weeks')
+    .select('*')
+    .eq('status', 'open')
+    .order('start_date', { ascending: true })
 
-const currentWeek = weeks?.find(w => {
-  const start = new Date(w.start_date + 'T00:00:00')
-  const end = new Date(start)
-  end.setDate(end.getDate() + 6)
-  if (today < start || today > end) return false
-  const weekSessions = allSessionsForWeeks.filter(s => s.week_id === w.id)
-  if (weekSessions.length === 0) return true
-  return weekSessions.some(s => !isSessionCompleted(s.session_date))
-})
+  let allSessionsForWeeks = []
+  if (weeks && weeks.length > 0) {
+    const { data: weekSessions } = await supabase
+      .from('sessions')
+      .select('week_id, session_date')
+      .in('week_id', weeks.map(w => w.id))
+    allSessionsForWeeks = weekSessions || []
+  }
 
-const futureWeeks = weeks?.filter(w => {
-  const start = new Date(w.start_date + 'T00:00:00')
-  return start > today
-}) || []
+  const currentWeek = weeks?.find(w => {
+    const start = new Date(w.start_date + 'T00:00:00')
+    const end = new Date(start)
+    end.setDate(end.getDate() + 6)
+    if (today < start || today > end) return false
+    const weekSessions = allSessionsForWeeks.filter(s => s.week_id === w.id)
+    if (weekSessions.length === 0) return true
+    return weekSessions.some(s => !isSessionCompleted(s.session_date))
+  })
 
-const nextWeek = futureWeeks[0] || null
+  const futureWeeks = weeks?.filter(w => {
+    const start = new Date(w.start_date + 'T00:00:00')
+    return start > today
+  }) || []
 
-let week = null
-if (viewNext && nextWeek) {
-  week = nextWeek
-} else if (currentWeek) {
-  week = currentWeek
-} else if (nextWeek) {
-  week = nextWeek
-} else if (weeks?.length > 0) {
-  week = weeks[weeks.length - 1]
-}
+  const nextWeek = futureWeeks[0] || null
 
-const showingNext = !!(viewNext && nextWeek)
-const canToggle = !!(currentWeek && nextWeek)
+  let week = null
+  if (viewNext && nextWeek) {
+    week = nextWeek
+  } else if (currentWeek) {
+    week = currentWeek
+  } else if (nextWeek) {
+    week = nextWeek
+  } else if (weeks?.length > 0) {
+    week = weeks[weeks.length - 1]
+  }
+
+  const showingNext = !!(viewNext && nextWeek)
+  const canToggle = !!(currentWeek && nextWeek)
 
   let sessions = []
   let sessionIds = []
@@ -68,7 +73,6 @@ const canToggle = !!(currentWeek && nextWeek)
 
   let availabilityCounts = {}
   const playersWithSignup = new Set()
-
   let cancellationCount = 0
 
   if (sessionIds.length > 0) {
@@ -161,9 +165,9 @@ const canToggle = !!(currentWeek && nextWeek)
                   <div className={`text-2xl font-medium ${shortCount > 0 ? 'text-amber-600' : 'text-slate-900'}`}>{shortCount}</div>
                 </div>
                 <div className="bg-slate-200 rounded-xl p-3">
-  <div className="text-xs text-slate-500 mb-1">Cancellations</div>
-  <div className={`text-2xl font-medium ${cancellationCount > 0 ? 'text-amber-600' : 'text-slate-900'}`}>{cancellationCount}</div>
-</div>
+                  <div className="text-xs text-slate-500 mb-1">Cancellations</div>
+                  <div className={`text-2xl font-medium ${cancellationCount > 0 ? 'text-amber-600' : 'text-slate-900'}`}>{cancellationCount}</div>
+                </div>
               </div>
 
               <div className="border-t border-slate-700 pt-3">
@@ -199,10 +203,7 @@ const canToggle = !!(currentWeek && nextWeek)
 
                 if (completed) {
                   return (
-                    <div
-                      key={session.id}
-                      className="block rounded-xl p-4 bg-gray-100 border border-gray-200 opacity-60"
-                    >
+                    <div key={session.id} className="block rounded-xl p-4 bg-gray-100 border border-gray-200 opacity-60">
                       <div className="text-sm font-medium mb-1 text-gray-400">{dateLabel}</div>
                       <div className="text-xs text-gray-400 mb-3">{formatTime(session.start_time)} · {session.location}</div>
                       <div className="flex justify-between items-center">
@@ -235,7 +236,9 @@ const canToggle = !!(currentWeek && nextWeek)
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-xs text-gray-400">
-                        {isEmpty ? `${session.court_count} ${session.court_count === 1 ? 'court' : 'courts'}` : `${count} player${count !== 1 ? 's' : ''} · ${session.court_count} ${session.court_count === 1 ? 'court' : 'courts'}`}
+                        {isEmpty
+                          ? `${session.court_count} ${session.court_count === 1 ? 'court' : 'courts'}`
+                          : `${count} player${count !== 1 ? 's' : ''} · ${session.court_count} ${session.court_count === 1 ? 'court' : 'courts'}`}
                       </span>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                         isFull ? 'bg-green-600 text-white' :
@@ -260,7 +263,7 @@ const canToggle = !!(currentWeek && nextWeek)
                     timeZone: 'UTC'
                   })
                   return (
-                    <div key={session.id} className="flex justify-between items-center text-sm">
+                    <div key={session.id} className="flex justify-between items-center">
                       <span className={`text-xs ${completed ? 'text-gray-300' : 'text-gray-700'}`}>{dateLabel}</span>
                       <span className={`text-xs ${
                         completed ? 'text-gray-300' :

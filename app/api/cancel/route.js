@@ -17,9 +17,9 @@ export async function POST(request) {
     .single()
 
   const { error } = await supabase
-    .from('availability')
-    .delete()
-    .eq('id', availabilityId)
+  .from('availability')
+  .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
+  .eq('id', availabilityId)
 
   if (error) {
     return Response.json({ error: 'Error cancelling' }, { status: 500 })

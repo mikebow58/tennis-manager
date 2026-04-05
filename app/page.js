@@ -72,16 +72,22 @@ const canToggle = currentWeek && nextWeek
   let availabilityCounts = {}
   const playersWithSignup = new Set()
 
+  let cancellationCount = 0
+
   if (sessionIds.length > 0) {
     const { data: availability } = await supabase
       .from('availability')
-      .select('session_id, player_id')
+      .select('session_id, player_id, status')
       .in('session_id', sessionIds)
 
     if (availability) {
-      availability.forEach(({ session_id, player_id }) => {
-        availabilityCounts[session_id] = (availabilityCounts[session_id] || 0) + 1
-        playersWithSignup.add(player_id)
+      availability.forEach(({ session_id, player_id, status }) => {
+        if (status === 'cancelled') {
+          cancellationCount++
+        } else {
+          availabilityCounts[session_id] = (availabilityCounts[session_id] || 0) + 1
+          playersWithSignup.add(player_id)
+        }
       })
     }
   }
@@ -158,9 +164,9 @@ const canToggle = currentWeek && nextWeek
                   <div className={`text-2xl font-medium ${shortCount > 0 ? 'text-amber-600' : 'text-slate-900'}`}>{shortCount}</div>
                 </div>
                 <div className="bg-slate-200 rounded-xl p-3">
-                  <div className="text-xs text-slate-500 mb-1">Cancellations</div>
-                  <div className="text-2xl font-medium text-slate-900">0</div>
-                </div>
+  <div className="text-xs text-slate-500 mb-1">Cancellations</div>
+  <div className={`text-2xl font-medium ${cancellationCount > 0 ? 'text-amber-600' : 'text-slate-900'}`}>{cancellationCount}</div>
+</div>
               </div>
 
               <div className="border-t border-slate-700 pt-3">

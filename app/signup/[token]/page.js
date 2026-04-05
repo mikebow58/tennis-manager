@@ -18,15 +18,16 @@ export default async function SignupPage({ params }) {
     )
   }
 
-  const today = new Date()
+const today = new Date()
 today.setHours(0, 0, 0, 0)
 const todayStr = today.toISOString().split('T')[0]
 
-const { data: sessions, error: sessionsError } = await supabase
+const { data: allSessions, error: sessionsError } = await supabase
   .from('sessions')
   .select('*, weeks!inner(status)')
   .eq('weeks.status', 'open')
   .gte('session_date', todayStr)
+  .is('reminder_sent_at', null)
   .order('session_date', { ascending: true })
 
   if (sessionsError) {
@@ -38,6 +39,7 @@ const { data: sessions, error: sessionsError } = await supabase
     .from('availability')
     .select('session_id')
     .eq('player_id', player.id)
+    .neq('status', 'cancelled')
 
   const signedUpSessionIds = existing ? existing.map(e => e.session_id) : []
 

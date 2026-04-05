@@ -27,6 +27,7 @@ export default function AddPlayerToSessionPage() {
         .from('availability')
         .select('player_id')
         .eq('session_id', sessionId)
+        .neq('status', 'cancelled')
 
       const existingIds = existing.map(e => e.player_id)
       setAlreadyAdded(existingIds)
@@ -104,23 +105,23 @@ export default function AddPlayerToSessionPage() {
             {availablePlayers.map((player) => {
               const isSaving = saving === player.id
               return (
-                <div key={player.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-3">
-                  <div>
-                    <div className="text-sm font-medium text-gray-900">
-                      {player.last_name}, {player.first_name}
-                    </div>
-                    <div className="text-xs text-gray-500 mt-0.5">
-                      {getSkillLabel(player.skill_admin)} · {player.gender === 'M' ? 'Male' : player.gender === 'F' ? 'Female' : player.gender} · <span className="capitalize">{player.player_type}</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => addPlayer(player.id)}
-                    disabled={isSaving}
-                    className="text-sm font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50 ml-4"
-                  >
-                    {isSaving ? 'Adding...' : 'Add'}
-                  </button>
-                </div>
+                <div key={player.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-3 gap-2">
+  <div className="min-w-0 flex-1">
+    <div className="text-sm font-medium text-gray-900 truncate">
+      {player.last_name}, {player.first_name}
+    </div>
+    <div className="text-xs text-gray-500 mt-0.5">
+      {getSkillLabel(player.skill_admin)} · {player.gender === 'M' ? 'M' : player.gender === 'F' ? 'F' : player.gender} · <span className="capitalize">{player.player_type}</span>
+    </div>
+  </div>
+  <button
+    onClick={() => addPlayer(player.id)}
+    disabled={isSaving}
+    className="text-sm font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50 flex-shrink-0"
+  >
+    {isSaving ? '...' : 'Add'}
+  </button>
+</div>
               )
             })}
           </div>

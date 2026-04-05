@@ -23,6 +23,7 @@ export default async function SessionPage({ params }) {
     .from('availability')
     .select('*, players(id, first_name, last_name, gender, skill_admin, player_type)')
     .eq('session_id', sessionId)
+    .neq('status', 'cancelled')
     .order('created_at', { ascending: true })
 
   if (availError) {

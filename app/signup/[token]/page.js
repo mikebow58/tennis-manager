@@ -50,7 +50,7 @@ export default async function SignupPage({ params }) {
           Hi, {player.first_name}!
         </h1>
         <p className="text-sm text-gray-500">
-          Select the days you want to play this week.
+          Which day(s) do you want to play this week?
         </p>
       </div>
 

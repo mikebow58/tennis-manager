@@ -43,7 +43,7 @@ export default function AddPlayerClient({ weekId, sessionId, allPlayers, initial
 
   return (
     <div className="min-h-screen bg-[#f1efe9] overflow-x-hidden w-screen max-w-full">
-      <div className="bg-[#0f172a] px-4 md:px-8 py-5">
+      <div className="bg-[#0f172a] px-4 py-5 w-full box-border">
         <div className="max-w-2xl mx-auto flex justify-between items-center">
           <div>
             <h1 className="text-xl font-semibold text-white">Add player</h1>

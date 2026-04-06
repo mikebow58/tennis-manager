@@ -20,6 +20,9 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en" className="overflow-x-hidden">
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  </head>
   <body className={`${geistSans.variable} ${geistMono.variable} antialiased overflow-x-hidden w-full`}>
         <nav className="border-b border-gray-200 px-4 md:px-8 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4 md:gap-8">

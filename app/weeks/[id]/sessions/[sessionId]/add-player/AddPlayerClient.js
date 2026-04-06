@@ -57,14 +57,14 @@ export default function AddPlayerClient({ weekId, sessionId, allPlayers, initial
         </div>
       </div>
 
-      <div className="px-4 md:px-8 py-4 max-w-2xl mx-auto">
+      <div className="px-4 md:px-8 py-4 max-w-2xl mx-auto w-full box-border">
         <div className="mb-4">
           <input
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search by name..."
-            className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm bg-white"
+            className="w-full max-w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm bg-white box-border"
             autoFocus
             autoComplete="off"
           />

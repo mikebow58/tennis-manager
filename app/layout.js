@@ -19,8 +19,8 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+    <html lang="en" className="overflow-x-hidden">
+  <body className={`${geistSans.variable} ${geistMono.variable} antialiased overflow-x-hidden w-full`}>
         <nav className="border-b border-gray-200 px-4 md:px-8 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4 md:gap-8">
             <span className="font-semibold text-gray-900 text-sm md:text-base">TRC</span>

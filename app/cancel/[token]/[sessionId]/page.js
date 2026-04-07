@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import CancelForm from './CancelForm'
+import { formatTime } from '@/lib/utils'
 
 export default async function CancelPage({ params }) {
   const { token, sessionId } = await params
@@ -72,7 +73,7 @@ export default async function CancelPage({ params }) {
 
       <div className="bg-gray-50 rounded-xl p-4 mb-6">
         <div className="text-sm text-gray-600 mb-1">Session details</div>
-        <div className="font-medium text-gray-900">{session.start_time} · {session.location}</div>
+        <div className="font-medium text-gray-900">{formatTime(session.start_time)} · {session.location}</div>
       </div>
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-8">

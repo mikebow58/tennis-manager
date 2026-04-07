@@ -49,9 +49,6 @@ export default async function SignupPage({ params }) {
         <h1 className="text-2xl font-semibold text-gray-900 mb-1">
           Hi, {player.first_name}!
         </h1>
-        <p className="text-sm text-gray-500">
-          Which day(s) do you want to play this week?
-        </p>
       </div>
 
       <SignupForm

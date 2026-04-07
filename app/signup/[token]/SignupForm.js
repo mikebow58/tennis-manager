@@ -93,6 +93,9 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
 
   return (
     <div>
+      <p className="text-sm text-gray-500 mb-6">
+        Select the days you'd like to play this week.
+      </p>
       <div className="space-y-2 mb-8">
         {sessions.length === 0 ? (
           <p className="text-gray-500 text-sm">No sessions are open for signup right now.</p>

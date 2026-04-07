@@ -1,7 +1,8 @@
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase-server'
 import { sendCancellationNotice } from '@/lib/email'
 
 export async function POST(request) {
+  const supabase = await createClient()
   const { availabilityId, playerId, sessionId } = await request.json()
 
   const { data: player } = await supabase

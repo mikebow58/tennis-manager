@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { sendReminder } from '@/lib/email'
+import { formatTime } from '@/lib/utils'
 
 export async function POST(request) {
   const { sessionId } = await request.json()
@@ -47,7 +48,7 @@ export async function POST(request) {
       playerName: player.first_name,
       playerEmail: player.email,
       sessionDate,
-      startTime: session.start_time,
+      startTime: formatTime(session.start_time),
       location: session.location,
       notes: session.notes,
       cancelUrl

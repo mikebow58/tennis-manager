@@ -3,10 +3,14 @@ import { getSkillLabel } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
-export default async function PlayersPage() {
+export default async function PlayersPage({ searchParams }) {
+  const { status } = await searchParams
+  const showInactive = status === 'inactive'
+
   const { data: players, error } = await supabase
     .from('players')
     .select('*')
+    .eq('active', !showInactive)
     .order('last_name', { ascending: true })
 
   if (error) {
@@ -20,13 +24,24 @@ export default async function PlayersPage() {
         <div className="max-w-5xl mx-auto flex justify-between items-center">
           <div>
             <h1 className="text-xl font-semibold text-white">Players</h1>
-            <p className="text-xs text-slate-300 mt-0.5">{players.length} active</p>
+            <p className="text-xs text-slate-300 mt-0.5">
+              {players.length} {showInactive ? 'inactive' : 'active'}
+            </p>
           </div>
           <a href="/players/new" className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium">Add player</a>
         </div>
       </div>
 
       <div className="px-4 md:px-8 py-4 max-w-5xl mx-auto">
+
+        <div className="flex justify-end mb-3">
+          {showInactive ? (
+            <a href="/players" className="text-xs text-blue-600 hover:underline">Show active players</a>
+          ) : (
+            <a href="/players?status=inactive" className="text-xs text-blue-600 hover:underline">Show inactive players</a>
+          )}
+        </div>
+
         <div className="md:hidden space-y-2">
           {players.map((player) => (
             <a key={player.id} href={`/players/${player.id}`} className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-3 hover:bg-gray-50">

@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { getSkillLabel } from '@/lib/utils'
 
-export default function PlayersPage() {
+function PlayersList() {
   const searchParams = useSearchParams()
   const showInactive = searchParams.get('status') === 'inactive'
   const [players, setPlayers] = useState([])
@@ -131,5 +131,13 @@ export default function PlayersPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function PlayersPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#f1efe9]" />}>
+      <PlayersList />
+    </Suspense>
   )
 }

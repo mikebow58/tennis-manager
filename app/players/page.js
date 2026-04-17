@@ -1,10 +1,12 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { getSkillLabel } from '@/lib/utils'
 
-export default function PlayersPage({ searchParams }) {
-  const showInactive = searchParams?.status === 'inactive'
+export default function PlayersPage() {
+  const searchParams = useSearchParams()
+  const showInactive = searchParams.get('status') === 'inactive'
   const [players, setPlayers] = useState([])
   const [loading, setLoading] = useState(true)
   const [toggling, setToggling] = useState(null)

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
 
 export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   const [selected, setSelected] = useState(signedUpSessionIds)
@@ -17,32 +16,34 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   }
 
   async function handleConfirm() {
-    setSaving(true)
+  setSaving(true)
 
-    const toAdd = selected.filter(id => !signedUpSessionIds.includes(id))
-    const toRemove = signedUpSessionIds.filter(id => !selected.includes(id))
+  const toAdd = selected.filter(id => !signedUpSessionIds.includes(id))
+  const toRemove = signedUpSessionIds.filter(id => !selected.includes(id))
 
-    if (toRemove.length > 0) {
-      await supabase
-        .from('availability')
-        .delete()
-        .eq('player_id', player.id)
-        .in('session_id', toRemove)
-    }
-
-    if (toAdd.length > 0) {
-      await supabase
-        .from('availability')
-        .insert(toAdd.map(sessionId => ({
-          session_id: sessionId,
-          player_id: player.id,
-          status: 'confirmed'
-        })))
-    }
-
-    setSaving(false)
-    setConfirmed(true)
+  if (toRemove.length > 0) {
+    await fetch('/api/availability', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId: player.id, sessionIds: toRemove })
+    })
   }
+
+  if (toAdd.length > 0) {
+    await fetch('/api/availability', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(toAdd.map(sessionId => ({
+        session_id: sessionId,
+        player_id: player.id,
+        status: 'confirmed'
+      })))
+    })
+  }
+
+  setSaving(false)
+  setConfirmed(true)
+}
 
   if (confirmed) {
   const confirmedSessions = sessions.filter(s => selected.includes(s.id))

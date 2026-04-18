@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import CancelForm from './CancelForm'
 import { formatTime } from '@/lib/utils'
 

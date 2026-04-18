@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import { getSkillLabel } from '@/lib/utils'
 
 export default function AddPlayerClient({ weekId, sessionId, allPlayers, initialExistingIds }) {
@@ -11,23 +10,28 @@ export default function AddPlayerClient({ weekId, sessionId, allPlayers, initial
   const [search, setSearch] = useState('')
 
   async function addPlayer(player) {
-    setSaving(player.id)
+  setSaving(player.id)
 
-    const { error } = await supabase
-      .from('availability')
-      .insert([{ session_id: sessionId, player_id: player.id, status: 'confirmed' }])
+  const res = await fetch('/api/availability', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify([{
+      session_id: sessionId,
+      player_id: player.id,
+      status: 'confirmed'
+    }])
+  })
 
-    if (error) {
-      console.error(error)
-      alert('Error adding player.')
-      setSaving(null)
-      return
-    }
-
-    setAlreadyAdded(prev => [...prev, player.id])
-    setAdded(prev => ({ ...prev, [player.id]: true }))
+  if (!res.ok) {
+    alert('Error adding player.')
     setSaving(null)
+    return
   }
+
+  setAlreadyAdded(prev => [...prev, player.id])
+  setAdded(prev => ({ ...prev, [player.id]: true }))
+  setSaving(null)
+}
 
   const availablePlayers = allPlayers.filter(p => {
     if (alreadyAdded.includes(p.id)) return false

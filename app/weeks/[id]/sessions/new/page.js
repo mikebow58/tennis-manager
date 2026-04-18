@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import { useRouter, useParams } from 'next/navigation'
 import Select from '@/app/components/Select'
 import { getTimeOptions } from '@/lib/utils'
@@ -27,22 +26,23 @@ export default function NewSessionPage() {
   }
 
   async function handleSubmit(e) {
-    e.preventDefault()
-    setSaving(true)
+  e.preventDefault()
+  setSaving(true)
 
-    const { error } = await supabase
-      .from('sessions')
-      .insert([{ ...form, week_id: weekId, court_count: Number(form.court_count) }])
+  const res = await fetch('/api/sessions/new', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...form, week_id: weekId, court_count: Number(form.court_count) })
+  })
 
-    if (error) {
-      console.error(error)
-      alert('Error saving session.')
-      setSaving(false)
-      return
-    }
-
-    router.push(`/weeks/${weekId}`)
+  if (!res.ok) {
+    alert('Error saving session.')
+    setSaving(false)
+    return
   }
+
+  router.push(`/weeks/${weekId}`)
+}
 
   return (
     <div className="min-h-screen bg-[#f1efe9]">

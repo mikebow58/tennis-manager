@@ -1,7 +1,6 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import Select from '@/app/components/Select'
 import { getSkillOptions } from '@/lib/utils'
@@ -25,35 +24,26 @@ export default function EditPlayerPage({ params: paramsPromise }) {
   })
 
   useEffect(() => {
-    async function loadPlayer() {
-      const { data, error } = await supabase
-        .from('players')
-        .select('*')
-        .eq('id', params.id)
-        .single()
-
-      if (error) {
-        console.error(error)
-        return
-      }
-
-      setForm({
-        first_name: data.first_name || '',
-        last_name: data.last_name || '',
-        mobile: data.mobile || '',
-        email: data.email || '',
-        gender: data.gender || '',
-        skill_self: data.skill_self ?? '',
-        skill_admin: data.skill_admin ?? '',
-        player_type: data.player_type || 'regular',
-        active: data.active ?? true,
-        notes: data.notes || '',
-      })
-      setLoading(false)
-    }
-
-    loadPlayer()
-  }, [params.id])
+  async function loadPlayer() {
+    const res = await fetch(`/api/players/${params.id}`)
+    if (!res.ok) return
+    const data = await res.json()
+    setForm({
+      first_name: data.first_name || '',
+      last_name: data.last_name || '',
+      mobile: data.mobile || '',
+      email: data.email || '',
+      gender: data.gender || '',
+      skill_self: data.skill_self ?? '',
+      skill_admin: data.skill_admin ?? '',
+      player_type: data.player_type || 'regular',
+      active: data.active ?? true,
+      notes: data.notes || '',
+    })
+    setLoading(false)
+  }
+  loadPlayer()
+}, [params.id])
 
   function handleChange(e) {
     const { name, value, type, checked } = e.target
@@ -64,49 +54,45 @@ export default function EditPlayerPage({ params: paramsPromise }) {
   }
 
   async function handleSubmit(e) {
-    e.preventDefault()
-    setSaving(true)
+  e.preventDefault()
+  setSaving(true)
 
-    const cleaned = {
-      ...form,
-      skill_self: form.skill_self === '' ? null : Number(form.skill_self),
-      skill_admin: form.skill_admin === '' ? null : Number(form.skill_admin),
-    }
-
-    const { error } = await supabase
-      .from('players')
-      .update(cleaned)
-      .eq('id', params.id)
-
-    if (error) {
-      console.error(error)
-      alert('Error saving player.')
-      setSaving(false)
-      return
-    }
-
-    router.push('/players')
+  const cleaned = {
+    ...form,
+    skill_self: form.skill_self === '' ? null : Number(form.skill_self),
+    skill_admin: form.skill_admin === '' ? null : Number(form.skill_admin),
   }
+
+  const res = await fetch(`/api/players/${params.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cleaned)
+  })
+
+  if (!res.ok) {
+    alert('Error saving player.')
+    setSaving(false)
+    return
+  }
+
+  router.push('/players')
+}
 
   async function handleDelete() {
-    const confirmed = window.confirm(
-      `Are you sure you want to delete ${form.first_name} ${form.last_name}? This cannot be undone.`
-    )
-    if (!confirmed) return
+  const confirmed = window.confirm(
+    `Are you sure you want to delete ${form.first_name} ${form.last_name}? This cannot be undone.`
+  )
+  if (!confirmed) return
 
-    const { error } = await supabase
-      .from('players')
-      .delete()
-      .eq('id', params.id)
+  const res = await fetch(`/api/players/${params.id}`, { method: 'DELETE' })
 
-    if (error) {
-      console.error(error)
-      alert('Error deleting player.')
-      return
-    }
-
-    router.push('/players')
+  if (!res.ok) {
+    alert('Error deleting player.')
+    return
   }
+
+  router.push('/players')
+}
 
   if (loading) {
     return <div className="min-h-screen bg-[#f1efe9] flex items-center justify-center text-gray-500 text-sm">Loading...</div>

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { supabase } from '@/lib/supabase'
 import { useRouter, useParams } from 'next/navigation'
 import Select from '@/app/components/Select'
 import { getTimeOptions } from '@/lib/utils'
@@ -24,28 +23,20 @@ export default function EditSessionPage() {
 
   useEffect(() => {
     async function loadSession() {
-      const { data, error } = await supabase
-        .from('sessions')
-        .select('*')
-        .eq('id', sessionId)
-        .single()
-
-      if (error) {
-        console.error(error)
-        return
-      }
-
-      setForm({
-        session_date: data.session_date || '',
-        start_time: data.start_time || '',
-        location: data.location || '',
-        court_count: data.court_count || 2,
-        format: data.format || 'switch_partners',
-        status: data.status || 'open',
-        notes: data.notes || '',
-      })
-      setLoading(false)
-    }
+  const res = await fetch(`/api/sessions/${sessionId}`)
+  if (!res.ok) return
+  const data = await res.json()
+  setForm({
+    session_date: data.session_date || '',
+    start_time: data.start_time || '',
+    location: data.location || '',
+    court_count: data.court_count || 2,
+    format: data.format || 'switch_partners',
+    status: data.status || 'open',
+    notes: data.notes || '',
+  })
+  setLoading(false)
+}
 
     loadSession()
   }, [sessionId])
@@ -56,48 +47,39 @@ export default function EditSessionPage() {
   }
 
   async function handleSubmit(e) {
-    e.preventDefault()
-    setSaving(true)
+  e.preventDefault()
+  setSaving(true)
 
-    const { error } = await supabase
-      .from('sessions')
-      .update({ ...form, court_count: Number(form.court_count) })
-      .eq('id', sessionId)
+  const res = await fetch(`/api/sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...form, court_count: Number(form.court_count) })
+  })
 
-    if (error) {
-      console.error(error)
-      alert('Error saving session.')
-      setSaving(false)
-      return
-    }
-
-    router.push(`/weeks/${id}/sessions/${sessionId}`)
+  if (!res.ok) {
+    alert('Error saving session.')
+    setSaving(false)
+    return
   }
+
+  router.push(`/weeks/${id}/sessions/${sessionId}`)
+}
 
   async function handleDelete() {
-    const confirmed = window.confirm(
-      'Are you sure you want to delete this session? This will also remove all player signups for this day.'
-    )
-    if (!confirmed) return
+  const confirmed = window.confirm(
+    'Are you sure you want to delete this session? This will also remove all player signups for this day.'
+  )
+  if (!confirmed) return
 
-    await supabase
-      .from('availability')
-      .delete()
-      .eq('session_id', sessionId)
+  const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' })
 
-    const { error } = await supabase
-      .from('sessions')
-      .delete()
-      .eq('id', sessionId)
-
-    if (error) {
-      console.error(error)
-      alert('Error deleting session.')
-      return
-    }
-
-    router.push(`/weeks/${id}`)
+  if (!res.ok) {
+    alert('Error deleting session.')
+    return
   }
+
+  router.push(`/weeks/${id}`)
+}
 
   if (loading) {
     return <div className="min-h-screen bg-[#f1efe9] flex items-center justify-center text-gray-500 text-sm">Loading...</div>

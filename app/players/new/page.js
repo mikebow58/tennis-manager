@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { generateToken } from '@/lib/tokens'
 import Select from '@/app/components/Select'
@@ -36,14 +35,16 @@ export default function NewPlayerPage() {
     ...form,
     skill_self: form.skill_self === '' ? null : Number(form.skill_self),
     skill_admin: form.skill_admin === '' ? null : Number(form.skill_admin),
+    signup_token: generateToken()
   }
 
-  const { error } = await supabase
-  .from('players')
-  .insert([{ ...cleaned, signup_token: generateToken() }])
+  const res = await fetch('/api/players/new', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cleaned)
+  })
 
-  if (error) {
-    console.error(error)
+  if (!res.ok) {
     alert('Error saving player.')
     setSaving(false)
     return

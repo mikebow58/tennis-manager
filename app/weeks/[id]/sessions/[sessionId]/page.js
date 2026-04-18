@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import SendReminderButton from '@/app/SendReminderButton'
 import RemovePlayerButton from './RemovePlayerButton'
 import { formatTime, getSkillLabel } from '@/lib/utils'

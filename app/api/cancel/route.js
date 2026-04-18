@@ -1,8 +1,7 @@
-import { createClient } from '@/lib/supabase-server'
+import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import { sendCancellationNotice } from '@/lib/email'
 
 export async function POST(request) {
-  const supabase = await createClient()
   const { availabilityId, playerId, sessionId } = await request.json()
 
   console.log('Cancel route hit', { availabilityId, playerId, sessionId })

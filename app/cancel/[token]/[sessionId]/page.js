@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import CancelForm from './CancelForm'
 import { formatTime } from '@/lib/utils'
 
@@ -76,18 +76,12 @@ export default async function CancelPage({ params }) {
         <div className="font-medium text-gray-900">{formatTime(session.start_time)} · {session.location}</div>
       </div>
 
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-8">
-        <div className="text-sm text-amber-800">
-          There are currently <strong>{playerCount} players</strong> signed up for this session. 
-          Cancelling will leave the court short and the organizer will be notified.
-        </div>
-      </div>
-
       <CancelForm
         playerId={player.id}
         playerName={player.first_name}
         sessionId={sessionId}
         availabilityId={availability.id}
+        playerCount={playerCount}
       />
     </div>
   )

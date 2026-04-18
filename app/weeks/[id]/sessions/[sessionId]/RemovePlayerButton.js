@@ -1,33 +1,32 @@
 'use client'
 
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 
 export default function RemovePlayerButton({ availabilityId, playerName }) {
   const router = useRouter()
   const [removing, setRemoving] = useState(false)
 
-  async function handleRemove() {
-    const confirmed = window.confirm(`Remove ${playerName} from this session?`)
-    if (!confirmed) return
+ async function handleRemove() {
+  const confirmed = window.confirm(`Remove ${playerName} from this session?`)
+  if (!confirmed) return
 
-    setRemoving(true)
+  setRemoving(true)
 
-    const { error } = await supabase
-      .from('availability')
-      .delete()
-      .eq('id', availabilityId)
+  const res = await fetch('/api/availability', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ availabilityId })
+  })
 
-    if (error) {
-      console.error(error)
-      alert('Error removing player.')
-      setRemoving(false)
-      return
-    }
-
-    router.refresh()
+  if (!res.ok) {
+    alert('Error removing player.')
+    setRemoving(false)
+    return
   }
+
+  router.refresh()
+}
 
   return (
     <button

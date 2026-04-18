@@ -1,11 +1,10 @@
-import { createClient } from '@/lib/supabase-server'
+import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import AddPlayerClient from './AddPlayerClient'
 
 export const dynamic = 'force-dynamic'
 
 export default async function AddPlayerToSessionPage({ params }) {
   const { id, sessionId } = await params
-  const supabase = await createClient()
 
   const [{ data: allPlayers }, { data: existing }] = await Promise.all([
     supabase

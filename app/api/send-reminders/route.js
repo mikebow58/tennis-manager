@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import { sendReminder } from '@/lib/email'
 import { formatTime } from '@/lib/utils'
 

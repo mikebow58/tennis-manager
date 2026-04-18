@@ -1,8 +1,7 @@
-import { createClient } from '@/lib/supabase-server'
+import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 
 export async function POST(request, { params }) {
   const { id } = await params
-  const supabase = await createClient()
   const { data: player } = await supabase
     .from('players').select('active').eq('id', id).single()
   await supabase

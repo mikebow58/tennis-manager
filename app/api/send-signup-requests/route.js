@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase'
+import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import { sendSignupRequest } from '@/lib/email'
 
 export async function POST(request) {

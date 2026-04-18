@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 
-export default function CancelForm({ playerId, playerName, sessionId, availabilityId }) {
+export default function CancelForm({ playerId, playerName, sessionId, availabilityId, playerCount }) {
   const [cancelling, setCancelling] = useState(false)
   const [cancelled, setCancelled] = useState(false)
 
@@ -43,20 +43,28 @@ export default function CancelForm({ playerId, playerName, sessionId, availabili
   }
 
   return (
-    <div className="space-y-3">
-      <button
-        onClick={handleCancel}
-        disabled={cancelling}
-        className="w-full bg-red-500 text-white py-3 rounded-lg font-medium hover:bg-red-600 disabled:opacity-50"
-      >
-        {cancelling ? 'Cancelling...' : 'Yes, cancel my spot'}
-      </button>
-      <button
-        onClick={() => window.history.back()}
-        className="w-full bg-white border border-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50"
-      >
-        Keep my spot
-      </button>
+    <div>
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-8">
+        <div className="text-sm text-amber-800">
+          There are currently <strong>{playerCount} players</strong> signed up for this session.
+          Cancelling will leave the court short and the organizer will be notified.
+        </div>
+      </div>
+      <div className="space-y-3">
+        <button
+          onClick={handleCancel}
+          disabled={cancelling}
+          className="w-full bg-red-500 text-white py-3 rounded-lg font-medium hover:bg-red-600 disabled:opacity-50"
+        >
+          {cancelling ? 'Cancelling...' : 'Yes, cancel my spot'}
+        </button>
+        <button
+          onClick={() => window.history.back()}
+          className="w-full bg-white border border-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50"
+        >
+          Keep my spot
+        </button>
+      </div>
     </div>
   )
 }

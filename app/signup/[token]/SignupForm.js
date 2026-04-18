@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { formatTime } from '@/lib/utils'
 
 export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   const [selected, setSelected] = useState(signedUpSessionIds)
@@ -76,7 +77,7 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
                 })}
               </div>
               <div className="text-xs text-green-600 mt-0.5">
-                {session.start_time ? `${session.start_time.slice(0,5)}` : ''} · {session.location}
+                {session.start_time ? formatTime(session.start_time) : ''} · {session.location}
               </div>
             </div>
           ))}
@@ -125,7 +126,7 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
                     {dateLabel}
                   </div>
                   <div className={`text-xs mt-0.5 ${isSelected ? 'text-green-600' : 'text-gray-400'}`}>
-                    {session.start_time} · {session.location}
+                    {session.start_time ? formatTime(session.start_time) : ''} · {session.location}
                   </div>
                 </div>
                 <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${

@@ -138,7 +138,7 @@ export default async function Dashboard({ searchParams }) {
             <div className="max-w-5xl mx-auto">
               <div className="flex justify-between items-start mb-4">
                 <div>
-                  <h1 className="text-xl md:text-2xl font-semibold text-white">Dashboard</h1>
+                  <h1 className="text-xl md:text-2xl font-semibold text-white">Dev Dashboard</h1>
                   <p className="text-xs text-slate-300 mt-0.5">Week of {weekLabel}</p>
                 </div>
                 {canToggle && (

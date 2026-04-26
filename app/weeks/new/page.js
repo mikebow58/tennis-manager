@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 
 export default function NewWeekPage() {
@@ -10,24 +9,24 @@ export default function NewWeekPage() {
   const [startDate, setStartDate] = useState('')
 
   async function handleSubmit(e) {
-    e.preventDefault()
-    setSaving(true)
+  e.preventDefault()
+  setSaving(true)
 
-    const { data: week, error } = await supabase
-      .from('weeks')
-      .insert([{ start_date: startDate, status: 'open' }])
-      .select()
-      .single()
+  const res = await fetch('/api/weeks/new', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ start_date: startDate, status: 'open' })
+  })
 
-    if (error) {
-      console.error(error)
-      alert('Error creating week.')
-      setSaving(false)
-      return
-    }
-
-    router.push(`/weeks/${week.id}`)
+  if (!res.ok) {
+    alert('Error creating week.')
+    setSaving(false)
+    return
   }
+
+  const week = await res.json()
+  router.push(`/weeks/${week.id}`)
+}
 
   return (
     <div className="min-h-screen bg-[#f1efe9]">

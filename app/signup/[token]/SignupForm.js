@@ -5,8 +5,9 @@ import { formatTime } from '@/lib/utils'
 
 export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   const [selected, setSelected] = useState(signedUpSessionIds)
-  const [saving, setSaving] = useState(false)
-  const [confirmed, setConfirmed] = useState(false)
+const [saving, setSaving] = useState(false)
+const [confirmed, setConfirmed] = useState(false)
+const [savedSessionIds, setSavedSessionIds] = useState(signedUpSessionIds)
 
   function toggleSession(sessionId) {
     setSelected(prev =>
@@ -19,8 +20,8 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   async function handleConfirm() {
   setSaving(true)
 
-  const toAdd = selected.filter(id => !signedUpSessionIds.includes(id))
-  const toRemove = signedUpSessionIds.filter(id => !selected.includes(id))
+  const toAdd = selected.filter(id => !savedSessionIds.includes(id))
+  const toRemove = savedSessionIds.filter(id => !selected.includes(id))
 
   if (toRemove.length > 0) {
     await fetch('/api/availability', {
@@ -42,6 +43,7 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
     })
   }
 
+  setSavedSessionIds(selected)
   setSaving(false)
   setConfirmed(true)
 }

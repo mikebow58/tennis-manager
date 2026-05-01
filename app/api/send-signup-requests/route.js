@@ -1,5 +1,5 @@
 import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
-import { sendSignupRequest } from '@/lib/email'
+import { sendEmailBatch } from '@/lib/email'
 
 export async function POST(request) {
   const { weekId } = await request.json()
@@ -32,32 +32,50 @@ export async function POST(request) {
   }
 
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
-  const results = { sent: 0, failed: 0, skipped: 0 }
+  let skipped = 0
 
+  // Build one email object per eligible player — no API calls yet
+  const emails = []
   for (const player of players) {
     if (!player.email || !player.signup_token) {
-      results.skipped++
+      skipped++
       continue
     }
-
     const signupUrl = `${baseUrl}/signup/${player.signup_token}`
-    const success = await sendSignupRequest({
-      playerName: player.first_name,
-      playerEmail: player.email,
-      signupUrl,
-      weekLabel
+    emails.push({
+      from: 'Treviso - Memorial Park <noreply@gtcourts.com>',
+      to: player.email,
+      subject: `Sign up for tennis this week — ${weekLabel}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+          <h2 style="color: #111; margin-bottom: 8px;">Hi ${player.first_name},</h2>
+          <p style="color: #444; line-height: 1.6;">
+            It's time to sign up for tennis this week. Tap the button below to select 
+            the days you want to play.
+          </p>
+          <div style="margin: 32px 0;">
+            <a href="${signupUrl}" 
+               style="background: #16a34a; color: white; padding: 12px 24px; 
+                      border-radius: 8px; text-decoration: none; font-weight: 500;">
+              Sign up for this week
+            </a>
+          </div>
+          <p style="color: #888; font-size: 13px;">
+            Or copy this link into your browser:<br/>
+            <a href="${signupUrl}" style="color: #2563eb;">${signupUrl}</a>
+          </p>
+        </div>
+      `
     })
-
-    if (success) {
-      results.sent++
-    } else {
-      results.failed++
-    }
   }
 
-await supabase
+  // Single batch call (or two calls at 150 players — well within rate limits)
+  const { sent, failed } = await sendEmailBatch(emails)
+
+  await supabase
     .from('weeks')
     .update({ signup_sent_at: new Date().toISOString() })
     .eq('id', weekId)
 
-  return Response.json({ success: true, results })}
+  return Response.json({ success: true, results: { sent, failed, skipped } })
+}

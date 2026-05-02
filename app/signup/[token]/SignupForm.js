@@ -22,14 +22,17 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   async function handleConfirm() {
     setSaving(true)
     setError(null)
+    console.log('base URL check:', window.location.origin)
     console.log('handleConfirm fired', { selected, savedSessionIds, toAdd: selected.filter(id => !savedSessionIds.includes(id)), toRemove: savedSessionIds.filter(id => !selected.includes(id)) })
 
     try {
       const toAdd = selected.filter(id => !savedSessionIds.includes(id))
       const toRemove = savedSessionIds.filter(id => !selected.includes(id))
 
-      if (toRemove.length > 0) {
-  const res = await fetch('/api/availability', {
+      const baseUrl = window.location.origin
+
+if (toRemove.length > 0) {
+  const res = await fetch(`${baseUrl}/api/availability`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ playerId: player.id, sessionIds: toRemove })
@@ -42,7 +45,7 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
 }
 
 if (toAdd.length > 0) {
-  const res = await fetch('/api/availability', {
+  const res = await fetch(`${baseUrl}/api/availability`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(toAdd.map(sessionId => ({

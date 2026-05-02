@@ -4,10 +4,12 @@ import { useState } from 'react'
 import { formatTime } from '@/lib/utils'
 
 export default function SignupForm({ player, sessions, signedUpSessionIds }) {
-  const [selected, setSelected] = useState(signedUpSessionIds)
-const [saving, setSaving] = useState(false)
-const [confirmed, setConfirmed] = useState(false)
-const [savedSessionIds, setSavedSessionIds] = useState(signedUpSessionIds)
+  const safeInitial = Array.isArray(signedUpSessionIds) ? signedUpSessionIds : []
+  const [selected, setSelected] = useState(safeInitial)
+  const [saving, setSaving] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)
+  const [savedSessionIds, setSavedSessionIds] = useState(safeInitial)
+  const [error, setError] = useState(null)
 
   function toggleSession(sessionId) {
     setSelected(prev =>
@@ -18,82 +20,91 @@ const [savedSessionIds, setSavedSessionIds] = useState(signedUpSessionIds)
   }
 
   async function handleConfirm() {
-  setSaving(true)
+    setSaving(true)
+    setError(null)
 
-  const toAdd = selected.filter(id => !savedSessionIds.includes(id))
-  const toRemove = savedSessionIds.filter(id => !selected.includes(id))
+    try {
+      const toAdd = selected.filter(id => !savedSessionIds.includes(id))
+      const toRemove = savedSessionIds.filter(id => !selected.includes(id))
 
-  if (toRemove.length > 0) {
-    await fetch('/api/availability', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerId: player.id, sessionIds: toRemove })
-    })
+      if (toRemove.length > 0) {
+        const res = await fetch('/api/availability', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playerId: player.id, sessionIds: toRemove })
+        })
+        if (!res.ok) throw new Error('Failed to remove sessions')
+      }
+
+      if (toAdd.length > 0) {
+        const res = await fetch('/api/availability', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(toAdd.map(sessionId => ({
+            session_id: sessionId,
+            player_id: player.id,
+            status: 'confirmed'
+          })))
+        })
+        if (!res.ok) throw new Error('Failed to save sessions')
+      }
+
+      setSavedSessionIds(selected)
+      setConfirmed(true)
+    } catch (err) {
+      console.error('Signup error:', err)
+      setError('Something went wrong. Please try again.')
+    } finally {
+      setSaving(false)
+    }
   }
-
-  if (toAdd.length > 0) {
-    await fetch('/api/availability', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(toAdd.map(sessionId => ({
-        session_id: sessionId,
-        player_id: player.id,
-        status: 'confirmed'
-      })))
-    })
-  }
-
-  setSavedSessionIds(selected)
-  setSaving(false)
-  setConfirmed(true)
-}
 
   if (confirmed) {
-  const confirmedSessions = sessions.filter(s => selected.includes(s.id))
+    const confirmedSessions = sessions.filter(s => selected.includes(s.id))
 
-  return (
-    <div className="text-center py-8">
-      <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-          <path d="M5 13l4 4L19 7" stroke="#15803d" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-      </div>
-      <h2 className="text-lg font-medium text-gray-900 mb-1">
-        You're all set, {player.first_name}!
-      </h2>
-      <p className="text-sm text-gray-500 mb-6">
-        Thank you for signing up to play this week.
-      </p>
-      {selected.length === 0 ? (
-        <p className="text-sm text-gray-400 mb-6">You are not signed up for any days this week.</p>
-      ) : (
-        <div className="space-y-2 mb-6 text-left">
-          {confirmedSessions.map(session => (
-            <div key={session.id} className="bg-green-50 border border-green-200 rounded-lg px-4 py-2.5">
-              <div className="text-sm font-medium text-green-800">
-                {new Date(session.session_date).toLocaleDateString('en-US', {
-                  weekday: 'long',
-                  month: 'long',
-                  day: 'numeric',
-                  timeZone: 'UTC'
-                })}
-              </div>
-              <div className="text-xs text-green-600 mt-0.5">
-                {session.start_time ? formatTime(session.start_time) : ''} · {session.location}
-              </div>
-            </div>
-          ))}
+    return (
+      <div className="text-center py-8">
+        <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M5 13l4 4L19 7" stroke="#15803d" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
         </div>
-      )}
-      <button
-        onClick={() => setConfirmed(false)}
-        className="text-sm text-blue-600 hover:underline"
-      >
-        Need to change your days?
-      </button>
-    </div>
-  )
-}
+        <h2 className="text-lg font-medium text-gray-900 mb-1">
+          You're all set, {player.first_name}!
+        </h2>
+        <p className="text-sm text-gray-500 mb-6">
+          Thank you for signing up to play this week.
+        </p>
+        {selected.length === 0 ? (
+          <p className="text-sm text-gray-400 mb-6">You are not signed up for any days this week.</p>
+        ) : (
+          <div className="space-y-2 mb-6 text-left">
+            {confirmedSessions.map(session => (
+              <div key={session.id} className="bg-green-50 border border-green-200 rounded-lg px-4 py-2.5">
+                <div className="text-sm font-medium text-green-800">
+                  {new Date(session.session_date).toLocaleDateString('en-US', {
+                    weekday: 'long',
+                    month: 'long',
+                    day: 'numeric',
+                    timeZone: 'UTC'
+                  })}
+                </div>
+                <div className="text-xs text-green-600 mt-0.5">
+                  {session.start_time ? formatTime(session.start_time) : ''} · {session.location}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <button
+          onClick={() => setConfirmed(false)}
+          className="text-sm text-blue-600 hover:underline"
+        >
+          Need to change your days?
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -146,9 +157,14 @@ const [savedSessionIds, setSavedSessionIds] = useState(signedUpSessionIds)
         )}
       </div>
 
+      {error && (
+        <p className="text-red-600 text-sm mb-4 text-center">{error}</p>
+      )}
+
       <button
+        type="button"
         onClick={handleConfirm}
-        disabled={saving}
+        disabled={saving || selected.length === 0}
         className="w-full bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50"
       >
         {saving ? 'Saving...' : 'Confirm signup'}

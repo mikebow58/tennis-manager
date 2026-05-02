@@ -22,8 +22,7 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   async function handleConfirm() {
     setSaving(true)
     setError(null)
-    console.log('base URL check:', window.location.origin)
-    console.log('handleConfirm fired', { selected, savedSessionIds, toAdd: selected.filter(id => !savedSessionIds.includes(id)), toRemove: savedSessionIds.filter(id => !selected.includes(id)) })
+  
 
     try {
       const toAdd = selected.filter(id => !savedSessionIds.includes(id))

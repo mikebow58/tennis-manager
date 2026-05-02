@@ -22,32 +22,41 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   async function handleConfirm() {
     setSaving(true)
     setError(null)
+    console.log('handleConfirm fired', { selected, savedSessionIds, toAdd: selected.filter(id => !savedSessionIds.includes(id)), toRemove: savedSessionIds.filter(id => !selected.includes(id)) })
 
     try {
       const toAdd = selected.filter(id => !savedSessionIds.includes(id))
       const toRemove = savedSessionIds.filter(id => !selected.includes(id))
 
       if (toRemove.length > 0) {
-        const res = await fetch('/api/availability', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ playerId: player.id, sessionIds: toRemove })
-        })
-        if (!res.ok) throw new Error('Failed to remove sessions')
-      }
+  const res = await fetch('/api/availability', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playerId: player.id, sessionIds: toRemove })
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    console.error('DELETE failed:', res.status, text)
+    throw new Error('Failed to remove sessions')
+  }
+}
 
-      if (toAdd.length > 0) {
-        const res = await fetch('/api/availability', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(toAdd.map(sessionId => ({
-            session_id: sessionId,
-            player_id: player.id,
-            status: 'confirmed'
-          })))
-        })
-        if (!res.ok) throw new Error('Failed to save sessions')
-      }
+if (toAdd.length > 0) {
+  const res = await fetch('/api/availability', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(toAdd.map(sessionId => ({
+      session_id: sessionId,
+      player_id: player.id,
+      status: 'confirmed'
+    })))
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    console.error('POST failed:', res.status, text)
+    throw new Error('Failed to save sessions')
+  }
+}
 
       setSavedSessionIds(selected)
       setConfirmed(true)

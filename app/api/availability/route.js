@@ -2,10 +2,17 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export async function POST(request) {
   const body = await request.json()
-  const { error } = await supabaseAdmin
+  console.log('POST BODY:', body)
+
+  const { data, error } = await supabaseAdmin
     .from('availability')
     .insert(body)
-  if (error) return Response.json({ error: 'Error adding availability' }, { status: 500 })
+
+  if (error) {
+    console.error('INSERT ERROR:', error)
+    return Response.json({ error: error.message }, { status: 500 })
+  }
+
   return Response.json({ success: true })
 }
 

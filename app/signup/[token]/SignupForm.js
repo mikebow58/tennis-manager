@@ -34,7 +34,11 @@ if (toRemove.length > 0) {
   const res = await fetch(`${baseUrl}/api/availability`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ playerId: player.id, sessionIds: toRemove })
+    body: JSON.stringify({ 
+      playerId: player.id, 
+      sessionIds: toRemove,
+      signup_token: player.signup_token
+    })
   })
   if (!res.ok) {
     const text = await res.text()
@@ -50,7 +54,8 @@ if (toAdd.length > 0) {
     body: JSON.stringify(toAdd.map(sessionId => ({
       session_id: sessionId,
       player_id: player.id,
-      status: 'confirmed'
+      status: 'confirmed',
+      signup_token: player.signup_token
     })))
   })
   if (!res.ok) {

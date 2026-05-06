@@ -22,13 +22,11 @@ export default async function SignupPage({ params }) {
   today.setHours(0, 0, 0, 0)
   const todayStr = today.toISOString().split('T')[0]
 
-  const { data: openSessions, error: sessionsError } = await supabase
-    .from('sessions')
-    .select('*, weeks!inner(status)')
-    .eq('weeks.status', 'open')
-    .gte('session_date', todayStr)
-    .is('reminder_sent_at', null)
-    .order('session_date', { ascending: true })
+  const { data: player, error: playerError } = await supabase
+  .from('players')
+  .select('id, first_name, last_name, signup_token')
+  .eq('signup_token', token)
+  .single()
 
   if (sessionsError) {
     console.error(sessionsError)
@@ -52,10 +50,10 @@ export default async function SignupPage({ params }) {
       </div>
 
       <SignupForm
-        player={player}
-        sessions={openSessions || []}
-        signedUpSessionIds={signedUpSessionIds}
-      />
+  player={player}
+  sessions={openSessions}
+  signedUpSessionIds={signedUpSessionIds}
+/>
     </div>
   )
 }

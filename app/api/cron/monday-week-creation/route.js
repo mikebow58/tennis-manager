@@ -58,11 +58,6 @@ export async function GET(request) {
     return new Response('Server configuration error', { status: 500 })
   }
 
-  // Temporary diagnostic — confirms service role key is present and matches
-  // expected value. Remove after env var issue is resolved.
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'MISSING'
-  console.log(`[monday-week-creation] DIAG service role key: ${serviceKey.slice(0, 6)}...${serviceKey.slice(-6)} length=${serviceKey.length}`)
-
   try {
     // -----------------------------------------------------------------------
     // STEP 1 — Stale week check

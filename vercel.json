@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/monday-week-creation",
       "schedule": "0 13 * * 1"
+    },
+    {
+      "path": "/api/cron/wednesday-approval-reminder",
+      "schedule": "0 12 * * 3"
     }
   ]
 }

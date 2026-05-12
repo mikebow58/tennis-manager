@@ -28,7 +28,7 @@ export default async function WeekPage({ params }) {
     return <div>Error loading sessions.</div>
   }
 
-  const weekLabel = new Date(week.start_date).toLocaleDateString('en-US', {
+  const weekLabel = new Date(week.week_start_date).toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',
     year: 'numeric',

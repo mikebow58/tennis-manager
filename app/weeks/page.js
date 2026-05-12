@@ -6,7 +6,7 @@ export default async function WeeksPage() {
   const { data: weeks, error } = await supabase
     .from('weeks')
     .select('*')
-    .order('start_date', { ascending: false })
+    .order('week_start_date', { ascending: false })
 
   if (error) {
     console.error(error)
@@ -33,7 +33,7 @@ export default async function WeeksPage() {
         ) : (
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
             {weeks.map((week, index) => {
-  const start = new Date(week.start_date + 'T00:00:00')
+  const start = new Date(week.week_start_date + 'T00:00:00')
   const end = new Date(start)
   end.setDate(end.getDate() + 6)
   const today = new Date()
@@ -44,7 +44,7 @@ export default async function WeeksPage() {
     <a key={week.id} href={`/weeks/${week.id}`} className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50 ${index !== weeks.length - 1 ? 'border-b border-gray-100' : ''}`}>
       <div>
         <div className={`text-sm font-medium ${isCompleted ? 'text-gray-400' : 'text-blue-600'}`}>
-          {new Date(week.start_date).toLocaleDateString('en-US', {
+          {new Date(week.week_start_date).toLocaleDateString('en-US', {
             month: 'long',
             day: 'numeric',
             year: 'numeric',

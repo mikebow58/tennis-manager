@@ -189,8 +189,8 @@ export async function GET(request) {
     // Build the per-player payload array. Each player gets:
     //   signupUrl  — their unique personalised signup link (token-based, no login)
     //   portalUrl  — their permanent player portal (bookmarkable, year-round access)
-    const playerPayloads = players.map((player) => ({
-      playerName: `${player.first_name} ${player.last_name}`,
+   const playerPayloads = players.map((player) => ({
+      playerFirstName: player.first_name,   // First name only — used in email greeting
       playerEmail: player.email,
       signupUrl: `${baseUrl}/signup/${player.signup_token}`,
       portalUrl: `${baseUrl}/portal/${player.signup_token}`,

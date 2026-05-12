@@ -103,7 +103,7 @@ function PlayersList() {
                         {player.last_name}, {player.first_name}
                       </a>
                     </td>
-                    <td className="px-6 py-3 text-gray-600">{player.mobile}</td>
+                    <td className="px-6 py-3 text-gray-600">{player.mobile_number}</td>
                     <td className="px-6 py-3 text-gray-600">{player.email}</td>
                     <td className="px-6 py-3 text-gray-600">{player.gender}</td>
                     <td className="px-6 py-3 text-gray-600">{getSkillLabel(player.skill_admin)}</td>

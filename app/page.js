@@ -16,7 +16,7 @@ export default async function Dashboard({ searchParams }) {
     .from('weeks')
     .select('*')
     .eq('status', 'open')
-    .order('start_date', { ascending: true })
+    .order('week_start_date', { ascending: true })
 
   let allSessionsForWeeks = []
   if (weeks && weeks.length > 0) {
@@ -107,7 +107,7 @@ export default async function Dashboard({ searchParams }) {
   }).length
 
   const weekLabel = week
-    ? new Date(week.start_date).toLocaleDateString('en-US', {
+    ? new Date(week.week_start_date).toLocaleDateString('en-US', {
         month: 'long',
         day: 'numeric',
         year: 'numeric',

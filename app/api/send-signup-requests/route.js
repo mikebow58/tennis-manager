@@ -14,7 +14,7 @@ export async function POST(request) {
     return Response.json({ error: 'Week not found' }, { status: 404 })
   }
 
-  const weekLabel = new Date(week.start_date).toLocaleDateString('en-US', {
+  const weekLabel = new Date(week.week_start_date).toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',
     year: 'numeric',

@@ -29,25 +29,28 @@ import { createClient } from '@/lib/supabase-server'
 import { redirect } from 'next/navigation'
 import ApproveWeekClient from './ApproveWeekClient'
 import ApproveActionsClient from './ApproveActionsClient'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export const dynamic = 'force-dynamic'
 
 export default async function ApproveWeekPage({ params }) {
   const { id: weekId } = await params
 
-  // Verify organiser session — redirect to login if not authenticated
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    redirect('/login')
-  }
+  // Auth check — uses server client which reads the organiser's session cookie
+const supabase = await createClient()
+const { data: { user } } = await supabase.auth.getUser()
+if (!user) {
+  redirect('/login')
+}
 
-  // ── Fetch week ─────────────────────────────────────────────────────────
-  const { data: week, error: weekError } = await supabase
-    .from('weeks')
-    .select('id, week_start_date, status, approved_at, signup_sent_at')
-    .eq('id', weekId)
-    .single()
+// Data queries — use supabaseAdmin (service role) consistent with all other
+// pages in the codebase. The server client's anon key is subject to RLS
+// which may block reads even with a valid session on some query paths.
+const { data: week, error: weekError } = await supabaseAdmin
+  .from('weeks')
+  .select('id, week_start_date, status, approved_at, signup_sent_at')
+  .eq('id', weekId)
+  .single()
 
   if (weekError || !week) {
     console.error('[approve page] Week not found:', weekError)
@@ -59,11 +62,11 @@ export default async function ApproveWeekPage({ params }) {
   }
 
   // ── Fetch sessions for this week ───────────────────────────────────────
-  const { data: sessions, error: sessionsError } = await supabase
-    .from('sessions')
-    .select('id, session_date, start_time, courts_available, notes, status')
-    .eq('week_id', weekId)
-    .order('session_date', { ascending: true })
+  const { data: sessions, error: sessionsError } = await supabaseAdmin
+  .from('sessions')
+  .select('id, session_date, start_time, courts_available, notes, status')
+  .eq('week_id', weekId)
+  .order('session_date', { ascending: true })
 
   if (sessionsError) {
     console.error('[approve page] Sessions fetch error:', sessionsError)

@@ -19,6 +19,7 @@
 'use client'
 
 import { useState } from 'react'
+import { formatTime } from '@/lib/utils'
 
 export default function ApproveWeekClient({ session, dateLabel, isEditable, weekId }) {
   // Controls whether the inline edit form is expanded
@@ -80,7 +81,7 @@ export default function ApproveWeekClient({ session, dateLabel, isEditable, week
           <div className="text-sm font-medium text-gray-900">{dateLabel}</div>
           <div className="text-xs text-gray-500 mt-0.5">
             {/* Display current values — reflects any in-form edits in real time */}
-            {startTime || '—'} · {courtsAvailable || '—'}{' '}
+            {startTime ? formatTime(startTime) : '—'} · {courtsAvailable || '—'}{' '}
             {courtsAvailable === 1 ? 'court' : 'courts'}
             {notes && <span className="text-gray-400"> · has note</span>}
           </div>

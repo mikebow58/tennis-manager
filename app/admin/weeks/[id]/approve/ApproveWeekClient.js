@@ -19,7 +19,7 @@
 'use client'
 
 import { useState } from 'react'
-import { formatTime } from '@/lib/utils'
+import { formatTime, getTimeOptions } from '@/lib/utils'
 
 export default function ApproveWeekClient({ session, dateLabel, isEditable, weekId }) {
   // Controls whether the inline edit form is expanded
@@ -102,18 +102,23 @@ export default function ApproveWeekClient({ session, dateLabel, isEditable, week
       {expanded && isEditable && (
         <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
 
-          {/* Start time */}
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              Start time
-            </label>
-            <input
-              type="time"
-              value={startTime}
-              onChange={(e) => setStartTime(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full max-w-[160px] focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
+          {/* Start time — on the hour or half hour only */}
+<div>
+  <label className="block text-xs font-medium text-gray-600 mb-1">
+    Start time
+  </label>
+  <select
+    value={startTime}
+    onChange={(e) => setStartTime(e.target.value)}
+    className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full max-w-[160px] focus:outline-none focus:ring-2 focus:ring-blue-500"
+  >
+    {getTimeOptions().map((opt) => (
+      <option key={opt.value} value={opt.value}>
+        {opt.label}
+      </option>
+    ))}
+  </select>
+</div>
 
           {/* Courts available */}
           <div>

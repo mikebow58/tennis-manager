@@ -27,7 +27,7 @@
 
 import { createClient } from '@/lib/supabase-server'
 import { redirect } from 'next/navigation'
-import ApproveWeekClient from './ApproveWeekClient'
+import SessionListClient from './SessionListClient'
 import ApproveActionsClient from './ApproveActionsClient'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
@@ -64,9 +64,21 @@ const { data: week, error: weekError } = await supabaseAdmin
   // ── Fetch sessions for this week ───────────────────────────────────────
   const { data: sessions, error: sessionsError } = await supabaseAdmin
   .from('sessions')
-  .select('id, session_date, start_time, courts_available, notes, status')
+  .select('id, session_date, start_time, courts_available, notes, status, location_id')
   .eq('week_id', weekId)
   .order('session_date', { ascending: true })
+
+  // Fetch active locations for the location dropdown on the session edit form
+  const { data: locations, error: locationsError } = await supabaseAdmin
+    .from('locations')
+    .select('id, name')
+    .eq('active', true)
+    .order('name', { ascending: true })
+
+  if (locationsError) {
+    console.error('[approve page] Locations fetch error:', locationsError)
+    // Non-fatal — page can still render; location dropdown will be empty
+  }
 
   if (sessionsError) {
     console.error('[approve page] Sessions fetch error:', sessionsError)
@@ -180,37 +192,14 @@ const { data: week, error: weekError } = await supabaseAdmin
           </div>
         )}
 
-        {/* ── Sessions list ── */}
-        {sessions.length === 0 ? (
-          <div className="bg-white border border-gray-200 rounded-xl px-4 py-8 text-center text-sm text-gray-400">
-            No sessions found for this week.
-          </div>
-        ) : (
-          <div>
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">
-              Sessions
-            </h2>
-            <div className="space-y-2">
-              {sessions.map((session) => {
-                const dateLabel = new Date(session.session_date).toLocaleDateString('en-US', {
-                  weekday: 'long',
-                  month: 'long',
-                  day: 'numeric',
-                  timeZone: 'UTC',
-                })
-                return (
-                  <ApproveWeekClient
-                    key={session.id}
-                    session={session}
-                    dateLabel={dateLabel}
-                    isEditable={isActionable}
-                    weekId={weekId}
-                  />
-                )
-              })}
-            </div>
-          </div>
-        )}
+       {/* Sessions list — rendered by SessionListClient so delete
+            can remove rows from state without a full page reload */}
+        <SessionListClient
+          sessions={sessions ?? []}
+          locations={locations ?? []}
+          isEditable={isActionable}
+          weekId={weekId}
+        />
 
         {/* ── Approval action buttons — pending_approval weeks only ── */}
         {isActionable && (

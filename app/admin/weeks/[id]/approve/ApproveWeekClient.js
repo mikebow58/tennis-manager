@@ -241,7 +241,7 @@ export default function ApproveWeekClient({ session, dateLabel, isEditable, week
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
-              placeholder="e.g. Meet at court 3 entrance"
+              placeholder="e.g. Arrive 10 minutes early for warmup."
               className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>

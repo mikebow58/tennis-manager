@@ -17,9 +17,11 @@ export default async function WeekPage({ params }) {
     return <div>Error loading week.</div>
   }
 
+  // Fetch sessions for this week, joining locations so we have the location name for display.
+  // V2 field names: courts_available (replaces court_count), location_id FK (replaces freeform location text).
   const { data: sessions, error: sessionsError } = await supabase
     .from('sessions')
-    .select('*')
+    .select('*, locations(name)')
     .eq('week_id', id)
     .order('session_date', { ascending: true })
 
@@ -69,7 +71,7 @@ export default async function WeekPage({ params }) {
                   <div>
                     <div className="text-sm font-medium text-gray-900">{dateLabel}</div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      {formatTime(session.start_time)} · {session.location} · {session.court_count} {session.court_count === 1 ? 'court' : 'courts'}
+                      {formatTime(session.start_time)} · {session.locations?.name ?? 'No location'} · {session.courts_available ?? '?'} {session.courts_available === 1 ? 'court' : 'courts'}
                     </div>
                   </div>
                   <a href={`/weeks/${id}/sessions/${session.id}`} className="text-sm text-blue-600 hover:underline ml-4">Manage</a>

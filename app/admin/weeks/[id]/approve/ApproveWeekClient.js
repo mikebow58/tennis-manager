@@ -55,7 +55,8 @@ export default function ApproveWeekClient({ session, dateLabel, isEditable, week
    * Includes location_id so the location is persisted correctly.
    */
   async function handleSave() {
-    setSaving(true)
+    console.log('[ApproveWeekClient] locationId at save:', locationId, 'locations prop:', locations)
+setSaving(true)
     setSaveResult(null)
 
     try {

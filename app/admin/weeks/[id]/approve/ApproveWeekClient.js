@@ -41,6 +41,7 @@ export default function ApproveWeekClient({ session, dateLabel, isEditable, week
   // and remains correct after a save because locationId is in state.
   const locationName =
     locations?.find((loc) => loc.id === locationId)?.name ?? session.locations?.name ?? '—'
+    console.log('[location debug]', { locationId, locationName, locationsCount: locations?.length, firstLocId: locations?.[0]?.id })
 
   // Two-tap delete confirmation state
   const [deleteStage, setDeleteStage] = useState('idle') // 'idle' | 'confirm'

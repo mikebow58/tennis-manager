@@ -34,13 +34,13 @@ export default function ApproveWeekClient({ session, dateLabel, isEditable, week
 
   // Location state — track the selected location_id so the subtitle stays live
   // after a save without needing a page reload or re-fetch
-  const [locationId, setLocationId] = useState(session.location_id || '')
+const [locationId, setLocationId] = useState(session.location_id ? String(session.location_id) : '')
 
   // Derive the display name from the current locationId against the locations list.
   // This updates immediately when the organiser changes the dropdown selection,
   // and remains correct after a save because locationId is in state.
-  const locationName =
-    locations?.find((loc) => loc.id === locationId)?.name ?? session.locations?.name ?? '—'
+ const locationName =
+    locations?.find((loc) => String(loc.id) === String(locationId))?.name ?? session.locations?.name ?? '—'
     console.log('[location debug]', { locationId, locationName, locationsCount: locations?.length, firstLocId: locations?.[0]?.id })
 
   // Two-tap delete confirmation state

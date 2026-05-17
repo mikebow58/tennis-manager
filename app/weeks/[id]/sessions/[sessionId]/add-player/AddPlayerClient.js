@@ -91,7 +91,7 @@ export default function AddPlayerClient({ weekId, sessionId, allPlayers, initial
                       {player.last_name}, {player.first_name}
                     </div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      {getSkillLabel(player.skill_admin)} · {player.gender === 'M' ? 'M' : player.gender === 'F' ? 'F' : player.gender} · <span className="capitalize">{player.player_type}</span>
+                      {getSkillLabel(player.skill_admin)}{player.gender ? ` · ${player.gender === 'M' ? 'M' : player.gender === 'F' ? 'F' : player.gender}` : ''}
                     </div>
                   </div>
                   <button

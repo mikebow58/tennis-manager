@@ -9,7 +9,7 @@ export default async function AddPlayerToSessionPage({ params }) {
   const [{ data: allPlayers }, { data: existing }] = await Promise.all([
     supabase
       .from('players')
-      .select('id, first_name, last_name, gender, skill_admin, player_type')
+      .select('id, first_name, last_name, gender, skill_admin')
       .eq('active', true)
       .order('last_name', { ascending: true }),
     supabase

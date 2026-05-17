@@ -12,7 +12,7 @@ export default function AddPlayerClient({ weekId, sessionId, allPlayers, initial
   async function addPlayer(player) {
   setSaving(player.id)
 
-  const res = await fetch('/api/availability', {
+  const res = await fetch('/api/admin/availability', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify([{

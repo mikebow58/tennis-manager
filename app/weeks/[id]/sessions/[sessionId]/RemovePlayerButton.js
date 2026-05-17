@@ -13,7 +13,7 @@ export default function RemovePlayerButton({ availabilityId, playerName }) {
 
   setRemoving(true)
 
-  const res = await fetch('/api/availability', {
+  const res = await fetch('/api/admin/availability', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ availabilityId })

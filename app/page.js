@@ -12,10 +12,12 @@ export default async function Dashboard({ searchParams }) {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
+  // V2: weeks.status valid values are pending_approval, approved, sent, closed.
+  // The dashboard shows any week that is not yet closed.
   const { data: weeks } = await supabase
     .from('weeks')
     .select('*')
-    .eq('status', 'open')
+    .in('status', ['pending_approval', 'approved', 'sent'])
     .order('week_start_date', { ascending: true })
 
   let allSessionsForWeeks = []
@@ -27,8 +29,9 @@ export default async function Dashboard({ searchParams }) {
     allSessionsForWeeks = weekSessions || []
   }
 
+  // V2: field is week_start_date (not start_date).
   const currentWeek = weeks?.find(w => {
-    const start = new Date(w.start_date + 'T00:00:00')
+    const start = new Date(w.week_start_date + 'T00:00:00')
     const end = new Date(start)
     end.setDate(end.getDate() + 6)
     if (today < start || today > end) return false
@@ -38,7 +41,7 @@ export default async function Dashboard({ searchParams }) {
   })
 
   const futureWeeks = weeks?.filter(w => {
-    const start = new Date(w.start_date + 'T00:00:00')
+    const start = new Date(w.week_start_date + 'T00:00:00')
     return start > today
   }) || []
 
@@ -62,9 +65,11 @@ export default async function Dashboard({ searchParams }) {
   let sessionIds = []
 
   if (week) {
+    // V2: join locations so we have the location name for display.
+    // courts_available replaces court_count.
     const { data } = await supabase
       .from('sessions')
-      .select('*')
+      .select('*, locations(name)')
       .eq('week_id', week.id)
       .order('session_date', { ascending: true })
     sessions = data || []
@@ -130,7 +135,12 @@ export default async function Dashboard({ searchParams }) {
       {!week ? (
         <div className="text-center py-16">
           <p className="text-gray-500 mb-4">No open weeks found.</p>
-          <Link href="/weeks/new" className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm">Create a week</Link>
+          <Link
+            href="/weeks/new"
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm"
+          >
+            Create a week
+          </Link>
         </div>
       ) : (
         <>
@@ -162,11 +172,15 @@ export default async function Dashboard({ searchParams }) {
                 </div>
                 <div className="bg-slate-200 rounded-xl p-3">
                   <div className="text-xs text-slate-500 mb-1">Courts short</div>
-                  <div className={`text-2xl font-medium ${shortCount > 0 ? 'text-amber-600' : 'text-slate-900'}`}>{shortCount}</div>
+                  <div className={`text-2xl font-medium ${shortCount > 0 ? 'text-amber-600' : 'text-slate-900'}`}>
+                    {shortCount}
+                  </div>
                 </div>
                 <div className="bg-slate-200 rounded-xl p-3">
                   <div className="text-xs text-slate-500 mb-1">Cancellations</div>
-                  <div className={`text-2xl font-medium ${cancellationCount > 0 ? 'text-amber-600' : 'text-slate-900'}`}>{cancellationCount}</div>
+                  <div className={`text-2xl font-medium ${cancellationCount > 0 ? 'text-amber-600' : 'text-slate-900'}`}>
+                    {cancellationCount}
+                  </div>
                 </div>
               </div>
 
@@ -199,16 +213,30 @@ export default async function Dashboard({ searchParams }) {
                   timeZone: 'UTC'
                 })
 
+                // V2: courts_available replaces court_count.
+                const courtsAvailable = session.courts_available ?? '?'
+                // V2: location name from join.
+                const locationName = session.locations?.name ?? '—'
+
                 const spotsNeeded = isFull ? 0 : (Math.ceil(count / 4) * 4) - count
 
                 if (completed) {
                   return (
-                    <div key={session.id} className="block rounded-xl p-4 bg-gray-100 border border-gray-200 opacity-60">
+                    <div
+                      key={session.id}
+                      className="block rounded-xl p-4 bg-gray-100 border border-gray-200 opacity-60"
+                    >
                       <div className="text-sm font-medium mb-1 text-gray-400">{dateLabel}</div>
-                      <div className="text-xs text-gray-400 mb-3">{formatTime(session.start_time)} · {session.location}</div>
+                      <div className="text-xs text-gray-400 mb-3">
+                        {formatTime(session.start_time)} · {locationName}
+                      </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-xs text-gray-400">{count} player{count !== 1 ? 's' : ''}</span>
-                        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-200 text-gray-500">Completed</span>
+                        <span className="text-xs text-gray-400">
+                          {count} player{count !== 1 ? 's' : ''}
+                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-200 text-gray-500">
+                          Completed
+                        </span>
                       </div>
                     </div>
                   )
@@ -219,31 +247,37 @@ export default async function Dashboard({ searchParams }) {
                     key={session.id}
                     href={`/weeks/${week.id}/sessions/${session.id}`}
                     className={`block rounded-xl p-4 transition-opacity hover:opacity-90 ${
-                      isFull ? 'bg-green-50 border border-green-200' :
-                      isShort && !isEmpty ? 'bg-amber-50 border border-amber-200' :
-                      'bg-white border border-gray-200'
+                      isFull
+                        ? 'bg-green-50 border border-green-200'
+                        : isShort && !isEmpty
+                        ? 'bg-amber-50 border border-amber-200'
+                        : 'bg-white border border-gray-200'
                     }`}
                   >
                     <div className={`text-sm font-medium mb-1 ${
-                      isFull ? 'text-green-900' :
-                      isShort && !isEmpty ? 'text-amber-900' :
-                      'text-gray-900'
+                      isFull
+                        ? 'text-green-900'
+                        : isShort && !isEmpty
+                        ? 'text-amber-900'
+                        : 'text-gray-900'
                     }`}>
                       {dateLabel}
                     </div>
                     <div className="text-xs text-gray-400 mb-3">
-                      {formatTime(session.start_time)} · {session.location}
+                      {formatTime(session.start_time)} · {locationName}
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-xs text-gray-400">
                         {isEmpty
-                          ? `${session.court_count} ${session.court_count === 1 ? 'court' : 'courts'}`
-                          : `${count} player${count !== 1 ? 's' : ''} · ${session.court_count} ${session.court_count === 1 ? 'court' : 'courts'}`}
+                          ? `${courtsAvailable} ${courtsAvailable === 1 ? 'court' : 'courts'}`
+                          : `${count} player${count !== 1 ? 's' : ''} · ${courtsAvailable} ${courtsAvailable === 1 ? 'court' : 'courts'}`}
                       </span>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        isFull ? 'bg-green-600 text-white' :
-                        isShort && !isEmpty ? 'bg-amber-500 text-white' :
-                        'bg-gray-500 text-white'
+                        isFull
+                          ? 'bg-green-600 text-white'
+                          : isShort && !isEmpty
+                          ? 'bg-amber-500 text-white'
+                          : 'bg-gray-500 text-white'
                       }`}>
                         {isFull ? 'Full' : isEmpty ? 'Open' : `${spotsNeeded} short`}
                       </span>
@@ -254,7 +288,9 @@ export default async function Dashboard({ searchParams }) {
             </div>
 
             <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <div className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Reminders</div>
+              <div className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">
+                Reminders
+              </div>
               <div className="space-y-2">
                 {sessions.map((session) => {
                   const completed = isSessionCompleted(session.session_date)
@@ -264,14 +300,26 @@ export default async function Dashboard({ searchParams }) {
                   })
                   return (
                     <div key={session.id} className="flex justify-between items-center">
-                      <span className={`text-xs ${completed ? 'text-gray-300' : 'text-gray-700'}`}>{dateLabel}</span>
+                      <span className={`text-xs ${completed ? 'text-gray-300' : 'text-gray-700'}`}>
+                        {dateLabel}
+                      </span>
                       <span className={`text-xs ${
-                        completed ? 'text-gray-300' :
-                        session.reminder_sent_at ? 'text-green-600' : 'text-gray-400'
+                        completed
+                          ? 'text-gray-300'
+                          : session.reminder_sent_at
+                          ? 'text-green-600'
+                          : 'text-gray-400'
                       }`}>
-                        {completed ? 'Completed' :
-                         session.reminder_sent_at
-                          ? `Sent · ${new Date(session.reminder_sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Denver' })}`
+                        {completed
+                          ? 'Completed'
+                          : session.reminder_sent_at
+                          ? `Sent · ${new Date(session.reminder_sent_at).toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                              timeZone: 'America/Denver'
+                            })}`
                           : 'Not yet sent'}
                       </span>
                     </div>

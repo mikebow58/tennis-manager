@@ -8,9 +8,11 @@ export const dynamic = 'force-dynamic'
 export default async function SessionPage({ params }) {
   const { id, sessionId } = await params
 
+  // V2: join locations for location name display.
+  // courts_available replaces court_count.
   const { data: session, error: sessionError } = await supabase
     .from('sessions')
-    .select('*')
+    .select('*, locations(name)')
     .eq('id', sessionId)
     .single()
 
@@ -19,9 +21,10 @@ export default async function SessionPage({ params }) {
     return <div>Error loading session.</div>
   }
 
+  // V2: player_type dropped from schema — removed from select and display.
   const { data: availability, error: availError } = await supabase
     .from('availability')
-    .select('*, players(id, first_name, last_name, gender, skill_admin, player_type)')
+    .select('*, players(id, first_name, last_name, gender, skill_admin)')
     .eq('session_id', sessionId)
     .neq('status', 'cancelled')
     .order('created_at', { ascending: true })
@@ -47,7 +50,11 @@ export default async function SessionPage({ params }) {
   })
 
   const playerCount = availability.length
-  const courtCount = session.court_count
+  // V2: courts_available replaces court_count.
+  const courtsAvailable = session.courts_available ?? '?'
+  // V2: location name from join.
+  const locationName = session.locations?.name ?? '—'
+
   const spotsNeeded = (Math.ceil(playerCount / 4) * 4) - playerCount
   const isFull = playerCount > 0 && playerCount % 4 === 0
 
@@ -65,9 +72,21 @@ export default async function SessionPage({ params }) {
     <div className="min-h-screen bg-[#f1efe9]">
       <div className="bg-[#0f172a] px-4 md:px-8 py-5">
         <div className="max-w-3xl mx-auto">
-          <a href={`/weeks/${id}`} className="text-xs text-slate-400 hover:text-slate-200 mb-2 inline-block">← Back to week</a>
+          
+            <a href={`/weeks/${id}`}
+            className="text-xs text-slate-400 hover:text-slate-200 mb-2 inline-block"
+           >
+            ← Back to week
+          </a>
           <h1 className="text-xl font-semibold text-white">{shortLabel}</h1>
-          <p className="text-xs text-slate-300 mt-0.5">Week of {new Date(session.session_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}</p>
+          <p className="text-xs text-slate-300 mt-0.5">
+            Week of {new Date(session.session_date).toLocaleDateString('en-US', {
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric',
+              timeZone: 'UTC'
+            })}
+          </p>
         </div>
       </div>
 
@@ -76,7 +95,12 @@ export default async function SessionPage({ params }) {
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <div className="bg-gray-50 border-b border-gray-200 px-4 py-3 flex justify-between items-center">
             <span className="text-sm font-medium text-gray-900">Session info</span>
-            <a href={`/weeks/${id}/sessions/${sessionId}/edit`} className="text-xs text-blue-600 hover:underline">Edit</a>
+            
+              <a href={`/weeks/${id}/sessions/${sessionId}/edit`}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              Edit
+            </a>
           </div>
           <div className="px-4 py-3 grid grid-cols-2 gap-y-2">
             <div>
@@ -85,15 +109,17 @@ export default async function SessionPage({ params }) {
             </div>
             <div>
               <div className="text-xs text-gray-500">Location</div>
-              <div className="text-sm font-medium text-gray-900">{session.location}</div>
+              <div className="text-sm font-medium text-gray-900">{locationName}</div>
             </div>
             <div>
               <div className="text-xs text-gray-500">Courts</div>
-              <div className="text-sm font-medium text-gray-900">{courtCount}</div>
+              <div className="text-sm font-medium text-gray-900">{courtsAvailable}</div>
             </div>
             <div>
               <div className="text-xs text-gray-500">Format</div>
-              <div className="text-sm font-medium text-gray-900 capitalize">{session.format.replace(/_/g, ' ')}</div>
+              <div className="text-sm font-medium text-gray-900 capitalize">
+                {session.format?.replace(/_/g, ' ') ?? '—'}
+              </div>
             </div>
           </div>
         </div>
@@ -103,16 +129,23 @@ export default async function SessionPage({ params }) {
             <div className="flex items-center gap-3">
               <h2 className="text-sm font-medium text-gray-900">Players</h2>
               <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                isFull ? 'bg-green-100 text-green-700' :
-                playerCount === 0 ? 'bg-gray-100 text-gray-500' :
-                'bg-amber-100 text-amber-700'
+                isFull
+                  ? 'bg-green-100 text-green-700'
+                  : playerCount === 0
+                  ? 'bg-gray-100 text-gray-500'
+                  : 'bg-amber-100 text-amber-700'
               }`}>
                 {playerCount} signed up
                 {!isFull && playerCount > 0 && ` · needs ${spotsNeeded} more`}
                 {isFull && ' · full'}
               </span>
             </div>
-            <a href={`/weeks/${id}/sessions/${sessionId}/add-player`} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 text-xs font-medium">Add player</a>
+            
+              <a href={`/weeks/${id}/sessions/${sessionId}/add-player`}
+              className="bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 text-xs font-medium"
+            >
+              Add player
+            </a>
           </div>
 
           {availability.length === 0 ? (
@@ -122,13 +155,19 @@ export default async function SessionPage({ params }) {
           ) : (
             <div className="space-y-2">
               {availability.map((entry) => (
-                <div key={entry.id} className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between">
+                <div
+                  key={entry.id}
+                  className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between"
+                >
                   <div>
                     <div className="text-sm font-medium text-gray-900">
                       {entry.players.last_name}, {entry.players.first_name}
                     </div>
                     <div className="text-xs text-gray-500 mt-0.5">
-                      {getSkillLabel(entry.players.skill_admin)} · {entry.players.gender === 'M' ? 'Male' : entry.players.gender === 'F' ? 'Female' : entry.players.gender} · <span className="capitalize">{entry.players.player_type}</span>
+                      {getSkillLabel(entry.players.skill_admin)}
+                      {entry.players.gender
+                        ? ` · ${entry.players.gender === 'M' ? 'Male' : entry.players.gender === 'F' ? 'Female' : entry.players.gender}`
+                        : ''}
                     </div>
                   </div>
                   <RemovePlayerButton
@@ -144,13 +183,20 @@ export default async function SessionPage({ params }) {
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <div className="bg-gray-50 border-b border-gray-200 px-4 py-3 flex justify-between items-center">
             <span className="text-sm font-medium text-gray-900">Reminders & Notes</span>
-            <a href={`/weeks/${id}/sessions/${sessionId}/edit`} className="text-xs text-blue-600 hover:underline">Edit</a>
+            
+              <a href={`/weeks/${id}/sessions/${sessionId}/edit`}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              Edit
+            </a>
           </div>
           <div className="px-4 py-3 space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-xs text-gray-500">Reminder</span>
               {reminderSentLabel ? (
-                <span className="text-xs text-green-600 font-medium">Sent · {reminderSentLabel}</span>
+                <span className="text-xs text-green-600 font-medium">
+                  Sent · {reminderSentLabel}
+                </span>
               ) : (
                 <SendReminderButton
                   sessionId={sessionId}

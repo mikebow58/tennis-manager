@@ -167,7 +167,7 @@ export async function GET(request) {
           // Friday and Saturday mornings when no reminder is due.
           console.log(
             `[daily-8am] Check B: session ${session.id} (${session.session_date}) ` +
-            `reminder due ${reminderDateStr} — not today. Skipping.`
+            `dayOfWeek=${dayOfWeek} daysPrior=${daysPrior} reminderDue=${reminderDateStr} today=${todayStr} — skipping.`
           )
           continue
         }

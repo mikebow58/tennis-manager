@@ -15,7 +15,7 @@ export default function NewWeekPage() {
   const res = await fetch('/api/weeks/new', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ start_date: startDate, status: 'open' })
+    body: JSON.stringify({ week_start_date: startDate, status: 'approved' })
   })
 
   if (!res.ok) {

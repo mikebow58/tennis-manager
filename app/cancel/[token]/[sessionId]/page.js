@@ -20,10 +20,10 @@ export default async function CancelPage({ params }) {
   }
 
   const { data: session, error: sessionError } = await supabase
-    .from('sessions')
-    .select('*')
-    .eq('id', sessionId)
-    .single()
+  .from('sessions')
+  .select('*, locations ( name )')
+  .eq('id', sessionId)
+  .single()
 
   if (sessionError || !session) {
     return (
@@ -73,7 +73,7 @@ export default async function CancelPage({ params }) {
 
       <div className="bg-gray-50 rounded-xl p-4 mb-6">
         <div className="text-sm text-gray-600 mb-1">Session details</div>
-        <div className="font-medium text-gray-900">{formatTime(session.start_time)} · {session.location}</div>
+        <div className="font-medium text-gray-900">{formatTime(session.start_time)} · {session.locations?.name ?? 'TBD'}</div>
       </div>
 
       <CancelForm
@@ -82,6 +82,7 @@ export default async function CancelPage({ params }) {
         sessionId={sessionId}
         availabilityId={availability.id}
         playerCount={playerCount}
+        signupToken={token}
       />
     </div>
   )

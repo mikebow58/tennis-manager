@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 
-export default function CancelForm({ playerId, playerName, sessionId, availabilityId, playerCount }) {
+export default function CancelForm({ playerId, playerName, sessionId, availabilityId, playerCount, signupToken }) {
   const [cancelling, setCancelling] = useState(false)
   const [cancelled, setCancelled] = useState(false)
 
@@ -12,7 +12,7 @@ export default function CancelForm({ playerId, playerName, sessionId, availabili
     const response = await fetch('/api/cancel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ availabilityId, playerId, sessionId })
+      body: JSON.stringify({ availabilityId, playerId, sessionId, signup_token: signupToken })
     })
 
     const data = await response.json()

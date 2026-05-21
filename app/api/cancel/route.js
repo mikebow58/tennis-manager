@@ -128,15 +128,17 @@ export async function POST(request) {
 
     // Fire post-close cancellation logic asynchronously.
     const playerName = `${player.first_name} ${player.last_name}`.trim()
-    handlePostCloseCancellation({
-      sessionId,
-      cancelledPlayerId: playerId,
-      cancelledPlayerName: playerName,
-      cancelledPlayerStatus: priorStatus,
-      session,
-    }).catch((err) => {
+    try {
+      await handlePostCloseCancellation({
+        sessionId,
+        cancelledPlayerId: playerId,
+        cancelledPlayerName: playerName,
+        cancelledPlayerStatus: priorStatus,
+        session,
+      })
+    } catch (err) {
       console.error('[api/cancel] Post-close cancellation handler error:', err)
-    })
+    }
 
     return Response.json({ success: true, action: 'cancelled' })
 

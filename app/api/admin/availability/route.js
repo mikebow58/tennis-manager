@@ -168,18 +168,20 @@ export async function DELETE(request) {
       // cancellation flow runs in the background. If it fails, the
       // availability status is already correctly set; the organiser
       // will see the cancelled record and can act manually.
-      handlePostCloseCancellation({
-        sessionId: avail.session_id,
-        cancelledPlayerId: avail.player_id,
-        cancelledPlayerName: playerName,
-        cancelledPlayerStatus: avail.status,
-        session: avail.sessions,
-      }).catch((err) => {
+     try {
+        await handlePostCloseCancellation({
+          sessionId: avail.session_id,
+          cancelledPlayerId: avail.player_id,
+          cancelledPlayerName: playerName,
+          cancelledPlayerStatus: avail.status,
+          session: avail.sessions,
+        })
+      } catch (err) {
         console.error(
           '[api/admin/availability] DELETE: post-close cancellation handler error:',
           err
         )
-      })
+      }
 
       return Response.json({ success: true, action: 'cancelled' })
 

@@ -96,11 +96,28 @@ export async function POST(request) {
     // Post-close: status transition + cancellation flow.
     console.log(`[api/cancel] Session closed — transitioning availability ${availabilityId} to cancelled`)
 
+    // Fetch current availability status before overwriting it.
+    // We need to know if the player was confirmed or tentative so the
+    // cancellation handler can apply the correct case (A, B, C, or D).
+    const { data: currentAvail, error: currentAvailError } = await supabase
+      .from('availability')
+      .select('status')
+      .eq('id', availabilityId)
+      .eq('player_id', playerId)
+      .single()
+
+    if (currentAvailError || !currentAvail) {
+      console.error('[api/cancel] Could not fetch current availability status:', currentAvailError?.message)
+      return Response.json({ error: 'Error cancelling' }, { status: 500 })
+    }
+
+    const priorStatus = currentAvail.status
+
     const { error } = await supabase
       .from('availability')
       .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
       .eq('id', availabilityId)
-      .eq('player_id', playerId) // Safety: ensure player only cancels their own record
+      .eq('player_id', playerId)
 
     if (error) {
       console.error('[api/cancel] Status update error:', error.message)
@@ -115,6 +132,7 @@ export async function POST(request) {
       sessionId,
       cancelledPlayerId: playerId,
       cancelledPlayerName: playerName,
+      cancelledPlayerStatus: priorStatus,
       session,
     }).catch((err) => {
       console.error('[api/cancel] Post-close cancellation handler error:', err)

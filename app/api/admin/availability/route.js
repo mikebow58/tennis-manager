@@ -172,6 +172,7 @@ export async function DELETE(request) {
         sessionId: avail.session_id,
         cancelledPlayerId: avail.player_id,
         cancelledPlayerName: playerName,
+        cancelledPlayerStatus: avail.status,
         session: avail.sessions,
       }).catch((err) => {
         console.error(

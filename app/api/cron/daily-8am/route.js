@@ -41,6 +41,7 @@ import {
   sendConfirmedReminderBatch,
   sendTentativeReminderBatch,
 } from '@/lib/email'
+import { runProcedure1, resolveSkill, SKILL_SELF_TO_ADMIN } from '@/lib/court-balancing'
 
 export async function GET(request) {
   // Record entry time so execution duration is calculable from logs.
@@ -233,185 +234,30 @@ export async function GET(request) {
 
         // ----------------------------------------------------------------
         // Step 3: Resolve each player's effective skill level.
-        // skill_admin (1–8 integer) is the authoritative rating when present.
-        // skill_self (1–5 integer) is the fallback, mapped to the 8-point
-        // scale: 1→1, 2→2, 3→4, 4→6, 5→8 (approximate NTRP equivalents).
-        // If neither is set, default to 4 (mid-range) so the player is
-        // never excluded from a court.
+        // Skill resolution delegated to lib/court-balancing.js.
         // ----------------------------------------------------------------
-        const SKILL_SELF_TO_ADMIN = { 1: 1, 2: 2, 3: 4, 4: 6, 5: 8 }
-
         const players = availability.map((avail) => ({
           availabilityId: avail.id,
           playerId: avail.player_id,
           firstName: avail.players.first_name,
           email: avail.players.email,
           signupToken: avail.players.signup_token,
-          createdAt: avail.created_at, // FIFO tiebreaker
-          // Resolve effective skill: admin rating if present, self-reported
-          // mapped to 8-point scale if not, default 4 if neither exists.
-          skill: avail.players.skill_admin
-            ?? SKILL_SELF_TO_ADMIN[avail.players.skill_self]
-            ?? 4,
+          createdAt: avail.created_at,
+          skill: resolveSkill(avail.players),
         }))
 
         // ----------------------------------------------------------------
         // Step 4: Run Procedure 1 — Initial Court Balancing.
-        //
-        // Goal: find the arrangement of players into complete courts of 4
-        // that minimises the maximum skill gap on any single court.
-        // FIFO (earliest created_at) breaks ties between equally scored
-        // arrangements.
-        //
-        // Approach:
-        //   - Determine how many complete courts are possible.
-        //   - If 0 complete courts possible (fewer than 4 players): all
-        //     players are tentative. No scoring needed.
-        //   - Otherwise: enumerate all combinations of (courtsCount * 4)
-        //     players chosen from the full roster, score each, pick best.
-        //   - Players in the winning combination → confirmed.
-        //   - Remaining players → tentative.
-        //
-        // The 2-step rule (max gap ≤ 2) is the optimisation target, not
-        // a hard constraint — a full court with a gap > 2 is always
-        // preferable to a cancelled court.
+        // Full algorithm in lib/court-balancing.js.
         // ----------------------------------------------------------------
-        const courtsCount = Math.floor(playerCount / 4)
-        const confirmedCount = courtsCount * 4 // Players that will go on full courts
-        const tentativeCount = playerCount - confirmedCount
+        const { confirmedIds: confirmedPlayerIds, tentativeCount, bestScore, courtsCount } =
+          runProcedure1(players)
 
         console.log(
           `[daily-8am] Check B: Procedure 1 — ${playerCount} players, ` +
-          `${courtsCount} full court(s), ${tentativeCount} tentative.`
+          `${courtsCount} full court(s), ${tentativeCount} tentative. ` +
+          `bestScore=${bestScore}`
         )
-
-        // IDs of players who end up confirmed after Procedure 1.
-        let confirmedPlayerIds = new Set()
-
-        if (courtsCount === 0) {
-          // Fewer than 4 players — no complete courts possible.
-          // All players are tentative. confirmedPlayerIds stays empty.
-          console.log(
-            `[daily-8am] Check B: Procedure 1 — fewer than 4 players, all tentative.`
-          )
-        } else if (tentativeCount === 0) {
-          // Perfect fill — all players confirmed, no balancing needed.
-          // Skip the combination search and confirm everyone.
-          console.log(
-            `[daily-8am] Check B: Procedure 1 — perfect fill, all players confirmed.`
-          )
-          confirmedPlayerIds = new Set(players.map((p) => p.availabilityId))
-        } else {
-          // Mixed case — need to find the best subset of confirmedCount players.
-          // Enumerate all combinations of size confirmedCount from the full
-          // roster and score each by the maximum skill gap across all courts
-          // formed from that subset.
-
-          /**
-           * Scores a subset of players arranged into courts of 4.
-           * Returns the maximum skill gap found on any single court.
-           * Lower score = better balance.
-           * Players must be sorted by skill descending before calling —
-           * this gives a reasonable court grouping (snake draft style)
-           * for the purpose of gap calculation.
-           *
-           * @param {object[]} subset - Array of player objects with .skill
-           * @returns {number} Maximum skill gap across all courts
-           */
-          function scoreCourts(subset) {
-            // Sort by skill descending to group similar levels together.
-            const sorted = [...subset].sort((a, b) => b.skill - a.skill)
-            let maxGap = 0
-            // Step through courts of 4 and find the gap within each court.
-            for (let i = 0; i < sorted.length; i += 4) {
-              const court = sorted.slice(i, i + 4)
-              const courtMax = court[0].skill // Highest skill (sorted desc)
-              const courtMin = court[court.length - 1].skill // Lowest skill
-              const gap = courtMax - courtMin
-              if (gap > maxGap) maxGap = gap
-            }
-            return maxGap
-          }
-
-          /**
-           * Generates all combinations of size k from array arr.
-           * Returns an array of arrays, each of length k.
-           * Used to enumerate all possible confirmed-player subsets.
-           *
-           * @param {any[]} arr
-           * @param {number} k
-           * @returns {any[][]}
-           */
-          function combinations(arr, k) {
-            if (k === 0) return [[]]
-            if (arr.length < k) return []
-            const [first, ...rest] = arr
-            // Combinations that include first:
-            const withFirst = combinations(rest, k - 1).map((combo) => [first, ...combo])
-            // Combinations that exclude first:
-            const withoutFirst = combinations(rest, k)
-            return [...withFirst, ...withoutFirst]
-          }
-
-          // Generate all possible subsets of size confirmedCount.
-          // Note: for large rosters this could be expensive. At realistic
-          // group sizes (≤ 20 players) the combination count stays manageable:
-          // C(20,16) = 4845 combinations. Well within Vercel's execution limit.
-          const allCombos = combinations(players, confirmedCount)
-          console.log(
-            `[daily-8am] Check B: Procedure 1 — evaluating ${allCombos.length} combination(s).`
-          )
-
-          let bestScore = Infinity
-          let bestCombo = null
-
-          for (const combo of allCombos) {
-            const score = scoreCourts(combo)
-
-            if (score < bestScore) {
-              // Strictly better — new best.
-              bestScore = score
-              bestCombo = combo
-            } else if (score === bestScore) {
-              // Tied score — apply FIFO tiebreaker.
-              // The players array is already sorted by created_at ascending
-              // (FIFO order) from the Supabase query. The "best" combo
-              // under FIFO is the one whose excluded players (tentative)
-              // signed up most recently — i.e. the combo that keeps the
-              // earliest signers confirmed.
-              //
-              // To compare: find which player is excluded in each combo
-              // and prefer the combo that excludes later-signed players.
-              // Simpler approach: the combo that includes more early-index
-              // players (from the FIFO-sorted array) wins.
-              const currentExcluded = players.filter(
-                (p) => !combo.find((c) => c.availabilityId === p.availabilityId)
-              )
-              const bestExcluded = players.filter(
-                (p) => !bestCombo.find((c) => c.availabilityId === p.availabilityId)
-              )
-              // Compare by the minimum index of excluded players — the combo
-              // that excludes players with higher indices (later signups) wins.
-              const currentMinExcludedIndex = Math.min(
-                ...currentExcluded.map((p) => players.indexOf(p))
-              )
-              const bestMinExcludedIndex = Math.min(
-                ...bestExcluded.map((p) => players.indexOf(p))
-              )
-              if (currentMinExcludedIndex > bestMinExcludedIndex) {
-                // Current combo excludes later signers — prefer it.
-                bestCombo = combo
-              }
-            }
-          }
-
-          // Record the confirmed player availability IDs from the best combo.
-          confirmedPlayerIds = new Set(bestCombo.map((p) => p.availabilityId))
-          console.log(
-            `[daily-8am] Check B: Procedure 1 — best arrangement score (max gap): ${bestScore}. ` +
-            `${confirmedPlayerIds.size} confirmed, ${tentativeCount} tentative.`
-          )
-        }
 
         // ----------------------------------------------------------------
         // Step 5: Write Procedure 1 results to the availability table.

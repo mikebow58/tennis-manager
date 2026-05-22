@@ -115,7 +115,7 @@ export async function POST(request) {
 
     const { error } = await supabase
       .from('availability')
-      .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
+      .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), court_assignment_status: null })
       .eq('id', availabilityId)
       .eq('player_id', playerId)
 

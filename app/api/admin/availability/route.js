@@ -150,6 +150,7 @@ export async function DELETE(request) {
         .update({
           status: 'cancelled',
           cancelled_at: new Date().toISOString(),
+          court_assignment_status: null,
         })
         .eq('id', availabilityId)
 

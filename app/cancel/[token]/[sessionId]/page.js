@@ -48,12 +48,11 @@ export default async function CancelPage({ params }) {
     )
   }
 
-  const { data: allAvailability } = await supabase
+  const { count: playerCount } = await supabase
     .from('availability')
-    .select('id')
+    .select('id', { count: 'exact', head: true })
     .eq('session_id', sessionId)
-
-  const playerCount = allAvailability?.length || 0
+    .in('status', ['confirmed', 'tentative'])
 
   const sessionDate = new Date(session.session_date).toLocaleDateString('en-US', {
     weekday: 'long',
@@ -81,7 +80,7 @@ export default async function CancelPage({ params }) {
         playerName={player.first_name}
         sessionId={sessionId}
         availabilityId={availability.id}
-        playerCount={playerCount}
+        playerCount={playerCount ?? 0}
         signupToken={token}
       />
     </div>

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 
-export default function CancelForm({ playerId, playerName, sessionId, availabilityId, playerCount, signupToken }) {
+export default function CancelForm({ playerId, playerName, sessionId, availabilityId, playerCount, signupToken, willLeaveShort }) {
   const [cancelling, setCancelling] = useState(false)
   const [cancelled, setCancelled] = useState(false)
 
@@ -44,12 +44,14 @@ export default function CancelForm({ playerId, playerName, sessionId, availabili
 
   return (
     <div>
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-8">
-        <div className="text-sm text-amber-800">
-          There are currently <strong>{playerCount} players</strong> signed up for this session.
-          Cancelling will leave the court short and the organizer will be notified.
+      {willLeaveShort && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-8">
+          <div className="text-sm text-amber-800">
+            There are currently <strong>{playerCount} players</strong> signed up for this session.
+            Cancelling will leave the court short and the organizer will be notified.
+          </div>
         </div>
-      </div>
+      )}
       <div className="space-y-3">
         <button
           onClick={handleCancel}

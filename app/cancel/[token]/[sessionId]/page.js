@@ -48,6 +48,16 @@ export default async function CancelPage({ params }) {
     )
   }
 
+  const { data: activeAvailability } = await supabase
+    .from('availability')
+    .select('id')
+    .eq('session_id', sessionId)
+    .in('status', ['confirmed', 'tentative'])
+
+  const playerCount = activeAvailability?.length || 0
+  const postCancelCount = Math.max(0, playerCount - 1)
+  const willLeaveShort = postCancelCount % 4 !== 0
+
   const { count: playerCount } = await supabase
     .from('availability')
     .select('id', { count: 'exact', head: true })
@@ -82,6 +92,7 @@ export default async function CancelPage({ params }) {
         availabilityId={availability.id}
         playerCount={playerCount ?? 0}
         signupToken={token}
+        willLeaveShort={willLeaveShort}
       />
     </div>
   )

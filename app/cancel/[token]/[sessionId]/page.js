@@ -58,11 +58,6 @@ export default async function CancelPage({ params }) {
   const postCancelCount = Math.max(0, playerCount - 1)
   const willLeaveShort = postCancelCount % 4 !== 0
 
-  const { count: playerCount } = await supabase
-    .from('availability')
-    .select('id', { count: 'exact', head: true })
-    .eq('session_id', sessionId)
-    .in('status', ['confirmed', 'tentative'])
 
   const sessionDate = new Date(session.session_date).toLocaleDateString('en-US', {
     weekday: 'long',

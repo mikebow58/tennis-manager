@@ -72,9 +72,12 @@ export async function POST(request) {
   // Single batch call (or two calls at 150 players — well within rate limits)
   const { sent, failed } = await sendEmailBatch(emails)
 
-  await supabase
+ await supabase
     .from('weeks')
-    .update({ signup_sent_at: new Date().toISOString() })
+    .update({ 
+      status: 'sent',
+      signup_sent_at: new Date().toISOString() 
+    })
     .eq('id', weekId)
 
   return Response.json({ success: true, results: { sent, failed, skipped } })

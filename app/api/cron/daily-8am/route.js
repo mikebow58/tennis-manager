@@ -40,8 +40,10 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import {
   sendConfirmedReminderBatch,
   sendTentativeReminderBatch,
+  sendSubRequestBroadcastStub,
 } from '@/lib/email'
 import { runProcedure1, resolveSkill, SKILL_SELF_TO_ADMIN } from '@/lib/court-balancing'
+import { buildTargetingPool } from '@/lib/targeting'
 
 export async function GET(request) {
   // Record entry time so execution duration is calculable from logs.
@@ -89,11 +91,237 @@ export async function GET(request) {
   // Collect outcome summaries from each check for the final response.
   const outcomes = { checkA: 'deferred', checkB: null, checkC: null }
 
+ // ==================================================================
+  // CHECK A — Pre-close fill-in (Wed–Sat only)
+  //
+  // Decision tree (Phase 1 Section 4.5 Check A):
+  //   1. Only runs if tomorrow is Wed–Sat (today is Tue–Fri).
+  //   2. Query sessions WHERE day = tomorrow AND status = 'open'
+  //      AND reminder_sent_at IS NULL.
+  //   3. For each: check if session is short (confirmed_count % 4 != 0).
+  //   4. If short and no fill-in sent today: build targeting pool,
+  //      insert sub_requests record (request_type = 'first_call'),
+  //      insert sub_request_recipients rows, send stub broadcast.
+  //
+  // References:
+  //   Phase 1 Section 4.5 Check A
+  //   Phase 1 Section 4.6 — daily_10am_fillin_expansion
+  //   Automation Logic Section 6.1
   // ==================================================================
-  // CHECK A — Pre-close fill-in (DEFERRED)
-  // Requires First Call list and skill level targeting — not yet built.
-  // ==================================================================
-  console.log('[daily-8am] Check A: deferred — skipping.')
+  console.log('[daily-8am] Check A: starting pre-close fill-in check.')
+
+  try {
+    // Check A only applies Tue–Fri (so that tomorrow is Wed–Sat).
+    const todayDayOfWeek = nowUtc.getUTCDay() // 0=Sun ... 6=Sat
+    // Adjusted for Mountain Time — use tomorrowStr's day of week.
+    const tomorrowDateObj = new Date(tomorrowStr + 'T12:00:00Z')
+    const tomorrowDayOfWeek = tomorrowDateObj.getUTCDay()
+    // Wed=3, Thu=4, Fri=5, Sat=6
+    const tomorrowIsWedToSat = tomorrowDayOfWeek >= 3 && tomorrowDayOfWeek <= 6
+
+    if (!tomorrowIsWedToSat) {
+      console.log(
+        `[daily-8am] Check A: tomorrow (${tomorrowStr}) is not Wed–Sat — skipping.`
+      )
+      outcomes.checkA = 'skipped'
+    } else {
+      console.log(
+        `[daily-8am] Check A: tomorrow is ${tomorrowStr} (day ${tomorrowDayOfWeek}) — evaluating sessions.`
+      )
+
+      // Fetch open sessions scheduled for tomorrow in sent weeks.
+      const { data: tomorrowSessions, error: tomorrowError } = await supabaseAdmin
+        .from('sessions')
+        .select(`
+          id,
+          session_date,
+          start_time,
+          courts_available,
+          match_type,
+          location_id,
+          locations ( name ),
+          weeks!inner ( status )
+        `)
+        .eq('session_date', tomorrowStr)
+        .eq('status', 'open')
+        .is('reminder_sent_at', null)
+        .is('cancelled_at', null)
+        .eq('weeks.status', 'sent')
+
+      if (tomorrowError) {
+        console.error('[daily-8am] Check A: error querying tomorrow sessions:', tomorrowError.message)
+        outcomes.checkA = 'error'
+      } else {
+        console.log(`[daily-8am] Check A: found ${tomorrowSessions.length} open session(s) for tomorrow.`)
+
+        let fillInsSent = 0
+        const sessionDayLabel = tomorrowDateObj.toLocaleDateString('en-US', {
+          weekday: 'long',
+          timeZone: 'UTC',
+        })
+
+        for (const session of tomorrowSessions) {
+          // ------------------------------------------------------------
+          // Step 1: Get current confirmed count for this session.
+          // ------------------------------------------------------------
+          const { data: confirmedAvail, error: confirmedError } = await supabaseAdmin
+            .from('availability')
+            .select('player_id, players ( skill_admin, skill_self )')
+            .eq('session_id', session.id)
+            .eq('status', 'confirmed')
+
+          if (confirmedError) {
+            console.error(
+              `[daily-8am] Check A: error fetching availability for session ${session.id}:`,
+              confirmedError.message
+            )
+            continue
+          }
+
+          const confirmedCount = confirmedAvail.length
+          const capacity = (session.courts_available ?? 0) * 4
+          const isShort = confirmedCount % 4 !== 0
+
+          console.log(
+            `[daily-8am] Check A: session ${session.id} — confirmedCount=${confirmedCount} ` +
+            `capacity=${capacity} isShort=${isShort}`
+          )
+
+          if (!isShort) {
+            console.log(`[daily-8am] Check A: session ${session.id} is not short — skipping.`)
+            continue
+          }
+
+          // ------------------------------------------------------------
+          // Step 2: Check if a fill-in request was already sent today.
+          // ------------------------------------------------------------
+          const todayStart = new Date(todayStr + 'T00:00:00Z').toISOString()
+          const { data: todaySubRequest } = await supabaseAdmin
+            .from('sub_requests')
+            .select('id')
+            .eq('session_id', session.id)
+            .eq('request_type', 'first_call')
+            .gte('sent_at', todayStart)
+            .maybeSingle()
+
+          if (todaySubRequest) {
+            console.log(
+              `[daily-8am] Check A: session ${session.id} — fill-in already sent today. Skipping.`
+            )
+            continue
+          }
+
+          // ------------------------------------------------------------
+          // Step 3: Build targeting pool.
+          // ------------------------------------------------------------
+          const rosterSkills = confirmedAvail.map((a) => resolveSkill(a.players))
+          const sessionMatchType = session.match_type ?? 'doubles'
+          const locationName = session.locations?.name ?? 'TBD'
+
+          const { firstCallPool } = await buildTargetingPool({
+            sessionId: session.id,
+            sessionDayLabel,
+            sessionMatchType,
+            rosterSkills,
+          })
+
+          console.log(
+            `[daily-8am] Check A: session ${session.id} — firstCallPool size=${firstCallPool.length}`
+          )
+
+          // ------------------------------------------------------------
+          // Step 4: Insert sub_requests record.
+          // ------------------------------------------------------------
+          const { data: subRequest, error: subInsertError } = await supabaseAdmin
+            .from('sub_requests')
+            .insert({
+              session_id: session.id,
+              sent_at: new Date().toISOString(),
+              request_type: 'first_call',
+              status: 'active',
+            })
+            .select('id')
+            .single()
+
+          if (subInsertError || !subRequest) {
+            console.error(
+              `[daily-8am] Check A: failed to insert sub_requests for session ${session.id}:`,
+              subInsertError?.message
+            )
+            continue
+          }
+
+          console.log(
+            `[daily-8am] Check A: sub_requests record created id=${subRequest.id} ` +
+            `for session ${session.id}.`
+          )
+
+          // ------------------------------------------------------------
+          // Step 5: Insert sub_request_recipients rows.
+          // ------------------------------------------------------------
+          if (firstCallPool.length > 0) {
+            const recipientRows = firstCallPool.map((player) => ({
+              sub_request_id: subRequest.id,
+              player_id: player.playerId,
+              sent_at: new Date().toISOString(),
+              response: 'no_response',
+            }))
+
+            const { error: recipientsError } = await supabaseAdmin
+              .from('sub_request_recipients')
+              .insert(recipientRows)
+
+            if (recipientsError) {
+              console.error(
+                `[daily-8am] Check A: error inserting sub_request_recipients for session ${session.id}:`,
+                recipientsError.message
+              )
+              // Non-fatal — sub_requests record exists, recipients tracking failed.
+              // Log and continue to stub broadcast.
+            } else {
+              console.log(
+                `[daily-8am] Check A: ${recipientRows.length} sub_request_recipients inserted.`
+              )
+            }
+          } else {
+            console.log(
+              `[daily-8am] Check A: no First Call players in pool — ` +
+              `sub_requests record created but no recipients inserted. ` +
+              `daily_10am_fillin_expansion will expand to all available.`
+            )
+          }
+
+          // ------------------------------------------------------------
+          // Step 6: Send stub broadcast (organiser notification).
+          // Real player targeting email deferred until lib/targeting.js
+          // email functions are built.
+          // ------------------------------------------------------------
+          const adminEmail = process.env.ADMIN_EMAIL
+          if (adminEmail) {
+            await sendSubRequestBroadcastStub({
+              adminEmail,
+              sessionDateLabel: tomorrowDateObj.toLocaleDateString('en-US', {
+                weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
+              }),
+              locationName,
+              openSpots: 4 - (confirmedCount % 4),
+              subRequestId: subRequest.id,
+            }).catch((err) =>
+              console.error(`[daily-8am] Check A: stub broadcast failed for session ${session.id}:`, err)
+            )
+          }
+
+          fillInsSent++
+        } // end for loop over tomorrow sessions
+
+        outcomes.checkA = { fillInsSent }
+        console.log('[daily-8am] Check A complete:', JSON.stringify(outcomes.checkA))
+      }
+    }
+  } catch (err) {
+    console.error('[daily-8am] Check A: unexpected error:', err)
+    outcomes.checkA = 'error'
+  }
 
   // ==================================================================
   // CHECK B — Reminder sends

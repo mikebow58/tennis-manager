@@ -19,6 +19,8 @@
     {
       "path": "/api/cron/daily-8am",
       "schedule": "0 14 * * *"
-    }
+    },
+    { "path": "/api/cron/daily-10am-fillin-expansion", 
+      "schedule": "0 16 * * *" }
   ]
 }

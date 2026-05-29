@@ -21,6 +21,9 @@
       "schedule": "0 14 * * *"
     },
     { "path": "/api/cron/daily-10am-fillin-expansion", 
-      "schedule": "0 16 * * *" }
+      "schedule": "0 16 * * *" },
+      { "path": "/api/cron/daily-5pm-escalation", "schedule": "0 23 * * *" },
+{ "path": "/api/cron/daily-6pm-court-assignment", "schedule": "0 0 * * *" },
+{ "path": "/api/cron/daily-8pm-backstop", "schedule": "0 2 * * *" }
   ]
 }

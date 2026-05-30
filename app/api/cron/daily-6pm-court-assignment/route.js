@@ -158,10 +158,9 @@ export async function GET(request) {
       continue
     }
 
-    const capacity = (session.courts_available ?? 0) * 4
-    const isFull = (confirmedCount ?? 0) >= capacity
+    const isFull = (confirmedCount ?? 0) % 4 === 0
 
-    if (isFull) {
+if (isFull) {
       if (!session.court_assignment_notified_at) {
         // Full session with no court assignment notification — Path AA/A
         // event-driven logic should have fired. Log as investigation item.

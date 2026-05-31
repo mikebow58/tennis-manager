@@ -278,13 +278,14 @@ export async function GET(request) {
     // Transition all tentative records to cancelled.
     const tentativeIds = tentativeAvail.map((a) => a.id)
 
-    const { error: cancelError } = await supabaseAdmin
-      .from('availability')
-      .update({
-        status: 'cancelled',
-        cancelled_at: new Date().toISOString(),
-      })
-      .in('id', tentativeIds)
+   const { error: cancelError } = await supabaseAdmin
+  .from('availability')
+  .update({
+    status: 'cancelled',
+    cancelled_at: new Date().toISOString(),
+    court_assignment_status: null,
+  })
+  .in('id', tentativeIds)
 
     if (cancelError) {
       console.error(

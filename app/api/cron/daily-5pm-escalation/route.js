@@ -36,6 +36,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendEscalationNotice } from '@/lib/email'
+import { formatDeadlineTime } from '@/lib/utils'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -263,22 +264,4 @@ export async function GET(request) {
     JSON.stringify({ status: 'ok', outcome, elapsedMs: elapsed }),
     { status: 200, headers: { 'Content-Type': 'application/json' } }
   )
-}
-
-/**
- * Formats a 24-hour time string (e.g. "20:00") into a display-friendly
- * string (e.g. "8:00pm"). Duplicated from lib/sub-requests.js — consider
- * extracting to lib/utils.js if used in more places.
- *
- * @param {string} time24
- * @returns {string}
- */
-function formatDeadlineTime(time24) {
-  const [hourStr, minuteStr] = time24.split(':')
-  const hour = parseInt(hourStr, 10)
-  const minute = parseInt(minuteStr, 10)
-  const period = hour >= 12 ? 'pm' : 'am'
-  const displayHour = hour % 12 === 0 ? 12 : hour % 12
-  const displayMinute = minute === 0 ? '' : `:${minuteStr}`
-  return `${displayHour}${displayMinute}${period}`
 }

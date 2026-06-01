@@ -13,26 +13,30 @@
  *
  * For each closed, non-cancelled session scheduled for tomorrow that is
  * still short:
- *   1. Runs a Procedure 2 stub (full rebalancing deferred pending
- *      lib/court-assignment.js build — see STUB note below).
+ *   1. Runs Procedure 2 (lib/court-assignment.js — runProcedure2) to
+ *      rebalance the full roster from scratch, assign court letters,
+ *      and distribute players to locations on multi-location days.
  *   2. Sends the organiser a court assignment review email with the
- *      current roster state and the 8pm auto-cancel warning.
- *   3. Sets sessions.court_assignment_notified_at = now().
+ *      recommended court arrangements and the 8pm auto-cancel warning.
+ *   3. Sets sessions.court_assignment_notified_at = now() on all
+ *      sibling sessions for the day (multi-location aware).
  *   4. Closes all active sub_requests for this session — automated
  *      broadcast window is now closed. Organiser takes ownership.
  *
- * STUB: Procedure 2 (full court rebalancing, court number assignment,
- * multi-location assignment) is deferred pending lib/court-assignment.js.
- * The cron correctly handles all state transitions and notifications.
- * When lib/court-assignment.js is built, replace the stub section below
- * with a call to runProcedure2() and include court-specific recommendations
- * in the sendCourtAssignmentReview call.
+ * Multi-location days: runProcedure2 resolves all sibling sessions
+ * automatically from the anchor session's week_id + session_date.
+ * This cron deduplicates by session_date so it does not double-fire
+ * for the same day when multiple sessions share it.
  *
  * Tables read:   sessions, availability, locations (join), weeks (join),
  *                admin_settings
  * Tables written: sessions (court_assignment_notified_at),
- *                 sub_requests (status → 'closed')
- * Emails sent:   sendCourtAssignmentReview — one per short session (organiser only)
+ *                 sub_requests (status → 'closed'),
+ *                 court_assignments (upsert via runProcedure2),
+ *                 availability (court_letter, court_assignment_status
+ *                               via runProcedure2)
+ * Emails sent:   sendCourtAssignmentReview — one per short session day
+ *                (organiser only)
  *
  * References:
  *   Phase 1 Cron Map — Section 4.8
@@ -43,6 +47,8 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendCourtAssignmentReview } from '@/lib/email'
+import { runProcedure2 } from '@/lib/court-assignment'
+import { formatDeadlineTime } from '@/lib/utils'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -79,7 +85,6 @@ export async function GET(request) {
 
   // ------------------------------------------------------------------
   // Read court_assignment_deadline from admin_settings.
-  // Used in the organiser email and for the auto-cancel warning.
   // ------------------------------------------------------------------
   const { data: deadlineSetting } = await supabaseAdmin
     .from('admin_settings')
@@ -97,6 +102,10 @@ export async function GET(request) {
   // that have not yet received a court assignment notification.
   // court_assignment_notified_at IS NULL confirms this cron hasn't
   // already fired for this session (idempotency guard).
+  //
+  // We deduplicate by session_date below to avoid running Procedure 2
+  // multiple times on the same day when there are sibling sessions
+  // (multi-location days). runProcedure2 handles all siblings internally.
   // ------------------------------------------------------------------
   const { data: tomorrowSessions, error: sessionsError } = await supabaseAdmin
     .from('sessions')
@@ -107,13 +116,14 @@ export async function GET(request) {
       courts_available,
       court_assignment_notified_at,
       court_assignment_sent_at,
-      locations ( name ),
+      week_id,
+      locations ( id, name ),
       weeks!inner ( status )
     `)
     .eq('session_date', tomorrowStr)
     .eq('status', 'closed')
     .is('cancelled_at', null)
-    .is('court_assignment_sent_at', null) // skip if 8pm already fired
+    .is('court_assignment_sent_at', null)
     .eq('weeks.status', 'sent')
 
   if (sessionsError) {
@@ -135,14 +145,18 @@ export async function GET(request) {
 
   let sessionsNotified = 0
   let sessionsSkipped = 0
+  // Track which week+date combos we've already processed to avoid
+  // running Procedure 2 twice on multi-location days.
+  const processedDays = new Set()
 
   for (const session of tomorrowSessions) {
+    const dayKey = `${session.week_id}:${session.session_date}`
+
     // ------------------------------------------------------------------
-    // Check whether this session is already full (Path AA/A already
-    // handled by event-driven logic). If full, skip — this cron handles
-    // Path B only (never fully filled).
-    // Per Phase 1 §4.8: if full but court_assignment_notified_at IS NULL,
-    // that's an unexpected gap — log it as an error condition.
+    // Check whether the session is full. This cron handles Path B only.
+    // Per Phase 1 §4.8: full sessions should have been handled by
+    // event-driven logic — flag as investigation item if notified_at
+    // is still NULL.
     // ------------------------------------------------------------------
     const { count: confirmedCount, error: confirmedError } = await supabaseAdmin
       .from('availability')
@@ -160,10 +174,8 @@ export async function GET(request) {
 
     const isFull = (confirmedCount ?? 0) % 4 === 0
 
-if (isFull) {
+    if (isFull) {
       if (!session.court_assignment_notified_at) {
-        // Full session with no court assignment notification — Path AA/A
-        // event-driven logic should have fired. Log as investigation item.
         console.warn(
           `[daily-6pm-court-assignment] Session ${session.id} is full but ` +
           `court_assignment_notified_at is NULL — event-driven logic may have missed this. ` +
@@ -179,89 +191,127 @@ if (isFull) {
     }
 
     // ------------------------------------------------------------------
-    // Session is short (Path B). Fetch tentative players for the email.
+    // Session is short (Path B).
+    // If we've already processed this day (sibling session on a
+    // multi-location day), skip — Procedure 2 already ran for the whole
+    // day and set notified_at on all siblings.
     // ------------------------------------------------------------------
-    const { data: tentativeAvail, error: tentativeError } = await supabaseAdmin
-      .from('availability')
-      .select(`
-        id,
-        players ( first_name, last_name )
-      `)
-      .eq('session_id', session.id)
-      .eq('status', 'tentative')
-
-    if (tentativeError) {
-      console.error(
-        `[daily-6pm-court-assignment] Error fetching tentative players for session ${session.id}:`,
-        tentativeError.message
+    if (processedDays.has(dayKey)) {
+      console.log(
+        `[daily-6pm-court-assignment] Session ${session.id} already processed as part of ` +
+        `multi-location day ${dayKey} — skipping.`
       )
+      sessionsSkipped++
       continue
     }
 
-    const tentativeCount = tentativeAvail.length
-    const subsNeeded = (4 - (tentativeCount % 4)) % 4 || 4
-
-    const tentativePlayerNames = tentativeAvail.map(
-      (a) => `${a.players.first_name} ${a.players.last_name}`
-    )
-
-    // ------------------------------------------------------------------
-    // STUB: Procedure 2 — Full Court Rebalancing.
-    //
-    // In production, this is where lib/court-assignment.js (runProcedure2)
-    // would be called to:
-    //   1. Rebalance the full current roster from scratch.
-    //   2. Assign court numbers and locations (multi-location days).
-    //   3. Generate court-specific recommendations for the organiser.
-    //
-    // Until lib/court-assignment.js is built, we skip the rebalancing
-    // and send the organiser the current confirmed/tentative state with
-    // a general recommendation. The state machine transitions (sub request
-    // close, notified_at timestamp) are still correct.
-    // ------------------------------------------------------------------
     console.log(
       `[daily-6pm-court-assignment] Session ${session.id} (Path B — short): ` +
-      `confirmed=${confirmedCount} tentative=${tentativeCount} subsNeeded=${subsNeeded}. ` +
-      `Procedure 2 stub — skipping rebalancing algorithm.`
+      `confirmed=${confirmedCount}. Running Procedure 2.`
     )
 
     // ------------------------------------------------------------------
-    // Format session details for the email.
+    // Run Procedure 2 — full rebalancing, court letter assignment,
+    // location distribution (multi-location aware).
     // ------------------------------------------------------------------
-    const sessionDate = new Date(session.session_date + 'T12:00:00Z')
-    const sessionDateLabel = sessionDate.toLocaleDateString('en-US', {
-      weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
-    })
+    const p2Result = await runProcedure2(session.id)
 
-    const startTimeLabel = session.start_time
-      ? new Date(`1970-01-01T${session.start_time}Z`).toLocaleTimeString('en-US', {
-          hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'UTC',
-        })
-      : 'TBD'
-
-    const locationName = session.locations?.name ?? 'TBD'
+    if (!p2Result.success) {
+      console.error(
+        `[daily-6pm-court-assignment] Procedure 2 failed for session ${session.id}: ${p2Result.error}`
+      )
+      // Non-fatal — still close sub requests and set notified_at so the
+      // 8pm backstop can act on current state.
+    } else {
+      console.log(
+        `[daily-6pm-court-assignment] Procedure 2 complete for session ${session.id}: ` +
+        `${p2Result.confirmedCount} confirmed, ${p2Result.tentativeCount} tentative, ` +
+        `${p2Result.subsNeeded} subs needed, ${p2Result.courts.length} courts.`
+      )
+    }
 
     // ------------------------------------------------------------------
-    // Close all active sub requests for this session.
-    // Per Phase 1 §4.8 and Phase 3 Group 5: the 6pm cron is the hard
-    // cut-off for automated broadcasts. Organiser takes ownership of
-    // manual outreach in the 6pm–8pm window.
+    // Close all active sub requests for all sessions on this day.
+    // Per Phase 1 §4.8 and Phase 3 Group 5: 6pm is the hard cut-off
+    // for automated broadcasts.
     // ------------------------------------------------------------------
+    const allSessionIds = p2Result.success
+      ? p2Result.sessions.map((s) => s.id)
+      : [session.id]
+
     const { error: closeSubsError } = await supabaseAdmin
       .from('sub_requests')
       .update({ status: 'closed' })
-      .eq('session_id', session.id)
+      .in('session_id', allSessionIds)
       .eq('status', 'active')
 
     if (closeSubsError) {
       console.error(
-        `[daily-6pm-court-assignment] Error closing sub requests for session ${session.id}:`,
+        `[daily-6pm-court-assignment] Error closing sub requests for day ${dayKey}:`,
         closeSubsError.message
       )
-      // Non-fatal — proceed with notification and notified_at write.
     } else {
       console.log(
-        `[daily-6pm-court-assignment] Active sub requests closed for session ${session.id}.`
+        `[daily-6pm-court-assignment] Active sub requests closed for day ${dayKey}.`
+      )
+    }
+
+    // ------------------------------------------------------------------
+    // Build email content from Procedure 2 result (or fallback to
+    // pre-P2 counts if P2 failed).
+    // ------------------------------------------------------------------
+    const sessionDateLabel = formatSessionDateLabel(session.session_date)
+    const startTimeLabel = formatStartTime(session.start_time)
+    const locationName = session.locations?.name ?? 'TBD'
+
+    let confirmedCountForEmail = confirmedCount ?? 0
+    let tentativeCountForEmail = 0
+    let subsNeededForEmail = 0
+    let tentativePlayerNames = []
+    let courtSummaryLines = []
+
+    if (p2Result.success) {
+      confirmedCountForEmail = p2Result.confirmedCount
+      tentativeCountForEmail = p2Result.tentativeCount
+      subsNeededForEmail = p2Result.subsNeeded
+
+      // Collect tentative player names from incomplete courts.
+      for (const court of p2Result.courts.filter((c) => !c.isComplete)) {
+        for (const player of court.players) {
+          tentativePlayerNames.push(`${player.firstName} ${player.lastName}`)
+        }
+      }
+
+      // Build court summary for the email (complete courts only).
+      for (const court of p2Result.courts.filter((c) => c.isComplete)) {
+        const playerNames = court.players
+          .map((p) => `${p.firstName} ${p.lastName}`)
+          .join(', ')
+        const skillRange = `${Math.min(...court.players.map((p) => p.skill))}–${Math.max(...court.players.map((p) => p.skill))}`
+        const locationSuffix = p2Result.isMultiLocation ? ` · ${court.locationName}` : ''
+        courtSummaryLines.push(
+          `Court ${court.courtLetter}${locationSuffix}: ${playerNames} (skill ${skillRange})`
+        )
+      }
+
+      if (tentativePlayerNames.length > 0) {
+        const tentativeNames = tentativePlayerNames.join(', ')
+        courtSummaryLines.push(`Tentative (incomplete court): ${tentativeNames}`)
+      }
+    } else {
+      // P2 failed — fall back to raw tentative query for email content.
+      const { data: tentativeAvail } = await supabaseAdmin
+        .from('availability')
+        .select('players ( first_name, last_name )')
+        .eq('session_id', session.id)
+        .eq('status', 'tentative')
+
+      tentativeCountForEmail = tentativeAvail?.length ?? 0
+      subsNeededForEmail = tentativeCountForEmail === 0
+        ? 0
+        : (4 - (tentativeCountForEmail % 4)) % 4 || 4
+      tentativePlayerNames = (tentativeAvail ?? []).map(
+        (a) => `${a.players.first_name} ${a.players.last_name}`
       )
     }
 
@@ -274,46 +324,46 @@ if (isFull) {
         sessionDateLabel,
         locationName,
         startTime: startTimeLabel,
-        confirmedCount: confirmedCount ?? 0,
-        tentativeCount,
-        subsNeeded,
+        confirmedCount: confirmedCountForEmail,
+        tentativeCount: tentativeCountForEmail,
+        subsNeeded: subsNeededForEmail,
         deadlineLabel,
         tentativePlayerNames,
+        courtSummaryLines,
       })
 
       if (sent) {
         console.log(
-          `[daily-6pm-court-assignment] Review email sent for session ${session.id}.`
+          `[daily-6pm-court-assignment] Review email sent for day ${dayKey}.`
         )
       } else {
         console.error(
-          `[daily-6pm-court-assignment] Failed to send review email for session ${session.id}.`
+          `[daily-6pm-court-assignment] Failed to send review email for day ${dayKey}.`
         )
       }
     }
 
     // ------------------------------------------------------------------
-    // Set court_assignment_notified_at on the session record.
-    // This marks that the organiser has been notified for this session
-    // at the 6pm checkpoint. Used by the 8pm backstop to confirm the
-    // notification chain is complete.
+    // Set court_assignment_notified_at on all sessions for this day.
     // ------------------------------------------------------------------
     const { error: notifyError } = await supabaseAdmin
       .from('sessions')
       .update({ court_assignment_notified_at: new Date().toISOString() })
-      .eq('id', session.id)
+      .in('id', allSessionIds)
 
     if (notifyError) {
       console.error(
-        `[daily-6pm-court-assignment] Error setting court_assignment_notified_at for session ${session.id}:`,
+        `[daily-6pm-court-assignment] Error setting court_assignment_notified_at for day ${dayKey}:`,
         notifyError.message
       )
     } else {
       console.log(
-        `[daily-6pm-court-assignment] court_assignment_notified_at set for session ${session.id}.`
+        `[daily-6pm-court-assignment] court_assignment_notified_at set for all sessions on day ${dayKey}.`
       )
       sessionsNotified++
     }
+
+    processedDays.add(dayKey)
   }
 
   const elapsed = Date.now() - startTime
@@ -330,19 +380,20 @@ if (isFull) {
   )
 }
 
-/**
- * Formats a 24-hour time string (e.g. "20:00") into a display-friendly
- * string (e.g. "8:00pm").
- *
- * @param {string} time24
- * @returns {string}
- */
-function formatDeadlineTime(time24) {
-  const [hourStr, minuteStr] = time24.split(':')
-  const hour = parseInt(hourStr, 10)
-  const minute = parseInt(minuteStr, 10)
-  const period = hour >= 12 ? 'pm' : 'am'
-  const displayHour = hour % 12 === 0 ? 12 : hour % 12
-  const displayMinute = minute === 0 ? '' : `:${minuteStr}`
-  return `${displayHour}${displayMinute}${period}`
+// ---------------------------------------------------------------------------
+// Local helpers
+// ---------------------------------------------------------------------------
+
+function formatSessionDateLabel(sessionDate) {
+  const date = new Date(sessionDate + 'T12:00:00Z')
+  return date.toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
+  })
+}
+
+function formatStartTime(startTime) {
+  if (!startTime) return 'TBD'
+  return new Date(`1970-01-01T${startTime}Z`).toLocaleTimeString('en-US', {
+    hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'UTC',
+  })
 }

@@ -172,23 +172,25 @@ export async function GET(request) {
       continue
     }
 
-    const isFull = (confirmedCount ?? 0) % 4 === 0
+    if (isFull && session.court_assignment_notified_at) {
+  // Full and already notified — Path AA/A event-driven logic handled this.
+  console.log(
+    `[daily-6pm-court-assignment] Session ${session.id} is full and already notified — skipping (Path AA/A).`
+  )
+  sessionsSkipped++
+  continue
+}
 
-    if (isFull) {
-      if (!session.court_assignment_notified_at) {
-        console.warn(
-          `[daily-6pm-court-assignment] Session ${session.id} is full but ` +
-          `court_assignment_notified_at is NULL — event-driven logic may have missed this. ` +
-          `Flagged for investigation.`
-        )
-      } else {
-        console.log(
-          `[daily-6pm-court-assignment] Session ${session.id} is full and already notified — skipping (Path AA/A).`
-        )
-      }
-      sessionsSkipped++
-      continue
-    }
+if (isFull && !session.court_assignment_notified_at) {
+  // Full but Procedure 2 has never run for this session — court letters
+  // not yet assigned. Fall through to run Procedure 2 and notify organiser.
+  // This covers Path AA (full at reminder send) where event-driven logic
+  // didn't fire, AND multi-location days where each session looks full
+  // individually but still needs court letter assignment.
+  console.log(
+    `[daily-6pm-court-assignment] Session ${session.id} is full but court letters not yet assigned — running Procedure 2.`
+  )
+}
 
     // ------------------------------------------------------------------
     // Session is short (Path B).

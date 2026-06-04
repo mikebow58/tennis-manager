@@ -172,6 +172,8 @@ export async function GET(request) {
       continue
     }
 
+    const isFull = (confirmedCount ?? 0) % 4 === 0
+
     if (isFull && session.court_assignment_notified_at) {
   // Full and already notified — Path AA/A event-driven logic handled this.
   console.log(

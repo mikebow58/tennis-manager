@@ -305,6 +305,7 @@ if (isFull && !session.court_assignment_notified_at) {
         )
       }
 
+      
       if (tentativePlayerNames.length > 0) {
         const tentativeNames = tentativePlayerNames.join(', ')
         courtSummaryLines.push(`Tentative (incomplete court): ${tentativeNames}`)

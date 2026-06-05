@@ -266,7 +266,7 @@ if (isFull && !session.court_assignment_notified_at) {
     // ------------------------------------------------------------------
     const sessionDateLabel = formatSessionDateLabel(session.session_date)
     const startTimeLabel = formatStartTime(session.start_time)
-    const locationName = session.locations?.name ?? 'TBD'
+    let locationName = session.locations?.name ?? 'TBD'
 
     let confirmedCountForEmail = confirmedCount ?? 0
     let tentativeCountForEmail = 0
@@ -278,6 +278,13 @@ if (isFull && !session.court_assignment_notified_at) {
       confirmedCountForEmail = p2Result.confirmedCount
       tentativeCountForEmail = p2Result.tentativeCount
       subsNeededForEmail = p2Result.subsNeeded
+
+      if (p2Result.isMultiLocation) {
+        const uniqueLocations = [...new Set(p2Result.courts.map((c) => c.locationName).filter(Boolean))]
+        if (uniqueLocations.length > 0) {
+          locationName = uniqueLocations.join(' & ')
+        }
+      }
 
       // Collect tentative player names from incomplete courts.
       for (const court of p2Result.courts.filter((c) => !c.isComplete)) {

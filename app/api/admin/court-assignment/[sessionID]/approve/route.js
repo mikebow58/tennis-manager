@@ -61,7 +61,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendCourtAssignmentDetailsFull, sendCourtAssignmentDetails } from '@/lib/email'
 
 export async function POST(request, { params }) {
-  const { sessionId } = params
+  // Fallback to params.id if the folder is named [id] instead of [sessionId]
+  const sessionId = params.sessionId || params.id
 
   console.log(`[api/admin/court-assignment/approve] POST received for session ${sessionId}`)
 
@@ -93,7 +94,7 @@ export async function POST(request, { params }) {
       locations ( id, name ),
       weeks!inner ( status )
     `)
-    .eq('id', Number(sessionId))
+    .eq('id', sessionId)
     .single()
 
   if (anchorError || !anchorSession) {

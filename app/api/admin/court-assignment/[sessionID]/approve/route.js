@@ -61,8 +61,11 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendCourtAssignmentDetailsFull, sendCourtAssignmentDetails } from '@/lib/email'
 
 export async function POST(request, { params }) {
-  // Fallback to params.id if the folder is named [id] instead of [sessionId]
-  const sessionId = params.sessionId || params.id
+  // 1. Await the params Promise so Next.js finishes resolving the URL variables
+  const resolvedParams = await params
+  
+  // 2. Extract the ID (supporting either folder naming convention)
+  const sessionId = resolvedParams.sessionId || resolvedParams.id
 
   console.log(`[api/admin/court-assignment/approve] POST received for session ${sessionId}`)
 

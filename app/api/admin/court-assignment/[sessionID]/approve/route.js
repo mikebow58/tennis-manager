@@ -99,7 +99,8 @@ export async function POST(request, { params }) {
 
   if (anchorError || !anchorSession) {
     console.error(`[api/admin/court-assignment/approve] Session ${sessionId} not found`)
-    return Response.json({ status: 'error', message: 'Session not found' }, { status: 404 })
+    return Response.json({ status: 'error', message: `Session not found for ID: ${sessionId}` }, 
+      { status: 404 })
   }
 
   if (anchorSession.weeks.status !== 'sent') {

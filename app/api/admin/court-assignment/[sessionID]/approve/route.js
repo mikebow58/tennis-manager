@@ -60,13 +60,23 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendCourtAssignmentDetailsFull, sendCourtAssignmentDetails } from '@/lib/email'
 
-export async function POST(request, { params }) {
-  // 1. Await the params Promise so Next.js finishes resolving the URL variables
-  const resolvedParams = await params
-  
-  // 2. Extract the ID (supporting either folder naming convention)
-  const sessionId = resolvedParams.sessionId || resolvedParams.id
+export async function POST(request, context) {
+  // 1. Safely resolve params whether it's a Next 15 Promise or a Next 14 plain object
+  let resolvedParams = {};
+  if (context && context.params) {
+    resolvedParams = typeof context.params.then === 'function' ? await context.params : context.params;
+  }
 
+  // 2. TEMPORARY HIJACK: Return the exact parameters Next.js is generating
+  return Response.json({
+    status: "diagnostic_mode",
+    message: "Checking Next.js parameter mapping keys",
+    detectedKeys: Object.keys(resolvedParams),
+    fullParamsObject: resolvedParams
+  });
+
+  // Everything below here is temporarily bypassed until we read this response
+  const sessionId = resolvedParams.sessionId || resolvedParams.id
   console.log(`[api/admin/court-assignment/approve] POST received for session ${sessionId}`)
 
   // ------------------------------------------------------------------

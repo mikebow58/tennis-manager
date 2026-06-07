@@ -61,22 +61,14 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendCourtAssignmentDetailsFull, sendCourtAssignmentDetails } from '@/lib/email'
 
 export async function POST(request, context) {
-  // 1. Safely resolve params whether it's a Next 15 Promise or a Next 14 plain object
-  let resolvedParams = {};
-  if (context && context.params) {
-    resolvedParams = typeof context.params.then === 'function' ? await context.params : context.params;
-  }
+  // 1. Safely resolve params (handles modern Next.js async promises)
+  const resolvedParams = context.params && typeof context.params.then === 'function' 
+    ? await context.params 
+    : context.params;
 
-  // 2. TEMPORARY HIJACK: Return the exact parameters Next.js is generating
-  return Response.json({
-    status: "diagnostic_mode",
-    message: "Checking Next.js parameter mapping keys",
-    detectedKeys: Object.keys(resolvedParams),
-    fullParamsObject: resolvedParams
-  });
+  // 2. Extract using the exact case-sensitive key found in diagnostics
+  const sessionId = resolvedParams.sessionID || resolvedParams.sessionId || resolvedParams.id;
 
-  // Everything below here is temporarily bypassed until we read this response
-  const sessionId = resolvedParams.sessionId || resolvedParams.id
   console.log(`[api/admin/court-assignment/approve] POST received for session ${sessionId}`)
 
   // ------------------------------------------------------------------

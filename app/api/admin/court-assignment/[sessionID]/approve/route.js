@@ -93,7 +93,7 @@ export async function POST(request, { params }) {
       locations ( id, name ),
       weeks!inner ( status )
     `)
-    .eq('id', sessionId)
+    .eq('id', Number(sessionId))
     .single()
 
   if (anchorError || !anchorSession) {

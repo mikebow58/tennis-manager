@@ -342,6 +342,7 @@ if (isFull && !session.court_assignment_notified_at) {
         deadlineLabel,
         tentativePlayerNames,
         courtSummaryLines,
+        reviewUrl: `${process.env.NEXT_PUBLIC_BASE_URL}/admin/court-assignment/${sessionId}`
       })
 
       if (sent) {

@@ -225,6 +225,8 @@ export default async function CourtAssignmentPage({ params }) {
   return (
     <CourtAssignmentClient
       anchorSessionId={sessionId}
+      weekId={anchorSession.week_id}
+      sessionDate={anchorSession.session_date}
       sessionDateLabel={sessionDateLabel}
       daySessions={daySessions}
       courtAssignments={courtAssignments ?? []}

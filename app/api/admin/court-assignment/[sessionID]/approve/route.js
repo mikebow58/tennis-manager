@@ -32,7 +32,30 @@
  *     availabilityId: number,   // availability.id
  *     playerId: number,
  *     sessionId: number,
- *   }>
+ *   }>,
+ *
+ *   // Optional: racquet-rotation pairings for this day. Replaces all
+ *   // existing court_rotations rows for (weekId, sessionDate) — an empty
+ *   // or omitted array clears all pairings.
+ *   rotations?: Array<{
+ *     winnersCourtLetter: string,
+ *     secondCourtLetter: string,
+ *     rotationType: 'rotate_partners' | 'keep_partners',
+ *   }>,
+ *
+ *   // Optional: freeform per-court notes for this day. Upserted on
+ *   // (weekId, sessionDate, courtLetter); any existing note for a court
+ *   // not present in this array is deleted (organiser cleared it).
+ *   courtNotes?: Array<{
+ *     courtLetter: string,
+ *     note: string,
+ *   }>,
+ *
+ *   // Required if rotations or courtNotes are provided — identifies the
+ *   // day these records belong to. Sourced from anchorSession server-side
+ *   // when available; included here for client-side construction.
+ *   weekId?: number,
+ *   sessionDate?: string,       // 'YYYY-MM-DD'
  * }
  *
  * BEHAVIOUR:
@@ -42,12 +65,14 @@
  *      sends sendCourtCancellationNotice to affected players.
  *   4. If assignments payload provided: validates and upserts to
  *      court_assignments, updates availability.court_letter.
- *   5. Checks whether all courts have court_number set.
+ *   5. Replaces court_rotations and upserts/cleans court_notes for
+ *      (week_id, session_date) — non-fatal if either step errors.
+ *   6. Checks whether all courts have court_number set.
  *      If yes: sends player-facing emails with court number included.
  *      If no:  sends session-details-only email and returns a warning.
  *              Players will receive "check the posted sheet" message
  *              at 8pm backstop if not updated before then.
- *   6. Sets sessions.court_assignment_approved_at = now() and
+ *   7. Sets sessions.court_assignment_approved_at = now() and
  *      sessions.court_assignment_sent_at = now() on all sibling sessions.
  *      Setting court_assignment_sent_at prevents the 8pm backstop from
  *      auto-firing for this day.
@@ -102,11 +127,16 @@ export async function POST(request, context) {
   }
 
   const overrideAssignments = body.assignments ?? null
-  const cancelledPlayers = body.cancelledPlayers ?? null // new: players to cancel on approval
+  const cancelledPlayers = body.cancelledPlayers ?? null
+  const rotations = body.rotations ?? null       // [{ winnersCourtLetter, secondCourtLetter, rotationType }]
+  const courtNotes = body.courtNotes ?? null     // [{ courtLetter, note }]
+  const bodyWeekId = body.weekId ?? null
+  const bodySessionDate = body.sessionDate ?? null
 
   console.log(
     `[api/admin/court-assignment/approve] overrideAssignments: ${overrideAssignments?.length ?? 0}, ` +
-    `cancelledPlayers: ${cancelledPlayers?.length ?? 0}`
+    `cancelledPlayers: ${cancelledPlayers?.length ?? 0}, ` +
+    `rotations: ${rotations?.length ?? 0}, courtNotes: ${courtNotes?.length ?? 0}`
   )
 
   // ---------------------------------------------------------------------------
@@ -304,6 +334,115 @@ export async function POST(request, context) {
   }
 
   // ---------------------------------------------------------------------------
+  // 6.5. Replace court_rotations and upsert/clean court_notes for this day.
+  //    Both tables key on (week_id, session_date) — day-level concepts, like
+  //    court letters. anchorSession already carries the authoritative values.
+  // ---------------------------------------------------------------------------
+  const dayWeekId = anchorSession.week_id
+  const daySessionDate = anchorSession.session_date
+
+  // --- court_rotations: full replace for the day ---------------------------
+  const { error: deleteRotationsError } = await supabaseAdmin
+    .from('court_rotations')
+    .delete()
+    .eq('week_id', dayWeekId)
+    .eq('session_date', daySessionDate)
+
+  if (deleteRotationsError) {
+    console.error(
+      `[api/admin/court-assignment/approve] court_rotations delete failed:`,
+      deleteRotationsError.message
+    )
+  }
+
+  if (rotations?.length) {
+    const rotationRows = rotations.map((r) => ({
+      week_id: dayWeekId,
+      session_date: daySessionDate,
+      winners_court_letter: r.winnersCourtLetter,
+      second_court_letter: r.secondCourtLetter,
+      rotation_type: r.rotationType,
+    }))
+
+    const { error: insertRotationsError } = await supabaseAdmin
+      .from('court_rotations')
+      .insert(rotationRows)
+
+    if (insertRotationsError) {
+      console.error(
+        `[api/admin/court-assignment/approve] court_rotations insert failed:`,
+        insertRotationsError.message
+      )
+    } else {
+      console.log(
+        `[api/admin/court-assignment/approve] court_rotations: ${rotationRows.length} pairing(s) saved for day ${daySessionDate}.`
+      )
+    }
+  } else {
+    console.log(
+      `[api/admin/court-assignment/approve] court_rotations: no pairings for day ${daySessionDate} (cleared).`
+    )
+  }
+
+  // --- court_notes: upsert present, delete removed --------------------------
+  if (courtNotes?.length) {
+    const noteRows = courtNotes.map((n) => ({
+      week_id: dayWeekId,
+      session_date: daySessionDate,
+      court_letter: n.courtLetter,
+      note: n.note,
+      updated_at: new Date().toISOString(),
+    }))
+
+    const { error: upsertNotesError } = await supabaseAdmin
+      .from('court_notes')
+      .upsert(noteRows, { onConflict: 'week_id,session_date,court_letter' })
+
+    if (upsertNotesError) {
+      console.error(
+        `[api/admin/court-assignment/approve] court_notes upsert failed:`,
+        upsertNotesError.message
+      )
+    } else {
+      console.log(
+        `[api/admin/court-assignment/approve] court_notes: ${noteRows.length} note(s) saved for day ${daySessionDate}.`
+      )
+    }
+
+    const currentLetters = courtNotes.map((n) => n.courtLetter)
+    const { error: deleteStaleNotesError } = await supabaseAdmin
+      .from('court_notes')
+      .delete()
+      .eq('week_id', dayWeekId)
+      .eq('session_date', daySessionDate)
+      .not('court_letter', 'in', `(${currentLetters.map(l => `"${l}"`).join(',')})`)
+
+    if (deleteStaleNotesError) {
+      console.error(
+        `[api/admin/court-assignment/approve] stale court_notes cleanup failed:`,
+        deleteStaleNotesError.message
+      )
+    }
+  } else {
+    const { error: deleteAllNotesError } = await supabaseAdmin
+      .from('court_notes')
+      .delete()
+      .eq('week_id', dayWeekId)
+      .eq('session_date', daySessionDate)
+
+    if (deleteAllNotesError) {
+      console.error(
+        `[api/admin/court-assignment/approve] court_notes clear failed:`,
+        deleteAllNotesError.message
+      )
+    } else {
+      console.log(
+        `[api/admin/court-assignment/approve] court_notes: no notes for day ${daySessionDate} (cleared).`
+      )
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // 7. Read current court_assignments to determine:
   //    (a) which players are confirmed (need assignment emails)
   //    (b) whether all courts have court_number set (soft warning check)
@@ -332,6 +471,52 @@ export async function POST(request, context) {
       { status: 500 }
     )
   }
+
+  // ---------------------------------------------------------------------------
+  // 7.5. Build rotation/note lookups by court letter, for inclusion in the
+  //    full-detail assignment email. Only relevant when court numbers are
+  //    set (the full-detail path) — without a court number, players are
+  //    told to check the posted sheet, where rotation/notes will appear
+  //    once the printable lineup sheet is built.
+  // ---------------------------------------------------------------------------
+  const { data: dayRotations } = await supabaseAdmin
+    .from('court_rotations')
+    .select('winners_court_letter, second_court_letter, rotation_type')
+    .eq('week_id', dayWeekId)
+    .eq('session_date', daySessionDate)
+
+  const { data: dayNotes } = await supabaseAdmin
+    .from('court_notes')
+    .select('court_letter, note')
+    .eq('week_id', dayWeekId)
+    .eq('session_date', daySessionDate)
+
+  // rotationLabelByLetter: court_letter -> human-readable rotation sentence.
+  // Built from both sides of each pairing so each court gets its own framing
+  // (the winners court vs. the second court read slightly differently).
+  const rotationLabelByLetter = {}
+  for (const r of dayRotations ?? []) {
+    const partnerText = r.rotation_type === 'keep_partners'
+      ? 'Keeping the same partner.'
+      : 'Switching partners each set.'
+
+    rotationLabelByLetter[r.winners_court_letter] =
+      `Court ${r.winners_court_letter} (winner's court), rotating with Court ${r.second_court_letter}. ${partnerText}`
+
+    rotationLabelByLetter[r.second_court_letter] =
+      `Court ${r.second_court_letter}, rotating with Court ${r.winners_court_letter} (winner's court). ${partnerText}`
+  }
+
+  // courtNoteByLetter: court_letter -> freeform organiser note text.
+  const courtNoteByLetter = {}
+  for (const n of dayNotes ?? []) {
+    courtNoteByLetter[n.court_letter] = n.note
+  }
+
+  console.log(
+    `[api/admin/court-assignment/approve] Loaded ${dayRotations?.length ?? 0} rotation pairing(s) ` +
+    `and ${dayNotes?.length ?? 0} note(s) for day ${daySessionDate}.`
+  )
 
   // ---------------------------------------------------------------------------
   // 8. Soft warning check: any confirmed court missing a court_number?
@@ -364,6 +549,8 @@ export async function POST(request, context) {
         locationName: a.locations?.name ?? 'TBD',
         courtNumber: a.court_number,
         notes: playerSession?.notes ?? null,
+        rotationLabel: rotationLabelByLetter[a.court_letter] ?? null,
+        courtNote: courtNoteByLetter[a.court_letter] ?? null,
         cancelUrl: `${baseUrl}/portal/${a.players.signup_token}`,
       }
     })
@@ -435,7 +622,13 @@ export async function POST(request, context) {
   // ---------------------------------------------------------------------------
   // 11. Build and return response.
   // ---------------------------------------------------------------------------
-  const responseBody = { status: 'ok', courtsSent, cancelledCount }
+  const responseBody = {
+    status: 'ok',
+    courtsSent,
+    cancelledCount,
+    rotationsSaved: rotations?.length ?? 0,
+    notesSaved: courtNotes?.length ?? 0,
+  }
 
   if (hasMissingNumbers) {
     responseBody.warning =

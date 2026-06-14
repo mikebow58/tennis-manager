@@ -11,7 +11,9 @@
  *   1. Assigning real-world court numbers to court letters (A → 3, B → 1, etc.)
  *   2. Moving players between courts (via dropdown reassignment)
  *   3. Cancelling incomplete courts (moves players to an unassigned pool)
- *   4. Approving — commits all changes in one transaction and sends emails
+ *   4. Configuring racquet-rotation pairings between courts at the same location
+ *   5. Adding optional freeform per-court notes (e.g. non-standard instructions)
+ *   6. Approving — commits all changes in one transaction and sends emails
  *
  * VALIDATION:
  *   - Every active court card must have exactly 4 players before Approve is enabled.
@@ -19,6 +21,16 @@
  *     Approve disabled).
  *   - Players in the unassigned pool are implicitly cancelled on Approve — they
  *     receive sendCourtCancellationNotice, not an assignment email.
+ *
+ * ROTATIONS & NOTES:
+ *   - Rotation pairings link two courts at the same location for "winners up,
+ *     losers down" racquet rotation. Each pairing designates a winners court
+ *     and whether partners switch each set or stay together.
+ *   - A court can belong to at most one pairing — handled via UI constraints.
+ *   - Per-court freeform notes are optional and independent of rotation pairings.
+ *   - Both are keyed by week_id + session_date (day-level concepts, like court
+ *     letters) and committed to court_rotations / court_notes on Approve.
+ *   - Cancelling a court removes any rotation pairing or note referencing it.
  *
  * MULTI-LOCATION:
  *   - All locations for the day are shown together on one screen.
@@ -149,6 +161,8 @@ function buildInitialState(daySessions, courtAssignments, availabilityRecords) {
 // ---------------------------------------------------------------------------
 export default function CourtAssignmentClient({
   anchorSessionId,
+  weekId,
+  sessionDate,
   sessionDateLabel,
   daySessions,
   courtAssignments,
@@ -161,6 +175,16 @@ export default function CourtAssignmentClient({
   const [state, setState] = useState(() =>
     buildInitialState(daySessions, courtAssignments, availabilityRecords)
   )
+
+  // Rotation pairings — array of pair objects, one per pairing the organiser
+  // has configured. Empty array = no rotations configured (default).
+  // Each entry: { id, locationId, winnersCourtLetter, secondCourtLetter, rotationType }
+  // `id` is a local-only key (crypto.randomUUID()) for React list rendering —
+  // not sent to the server, which keys rows by court letters instead.
+  const [rotations, setRotations] = useState([])
+
+  // Per-court freeform notes. Keyed by court letter. Empty/missing = no note.
+  const [courtNotes, setCourtNotes] = useState({})
 
   // Submission state — tracks in-progress and result of the Approve POST.
   const [submitting, setSubmitting] = useState(false)
@@ -355,6 +379,84 @@ export default function CourtAssignmentClient({
         unassigned: [...prev.unassigned, ...playersWithOrigin],
       }
     })
+
+    // A cancelled court can no longer be part of a rotation pairing —
+    // remove any pairing referencing this letter.
+    setRotations(prev => prev.filter(r =>
+      r.winnersCourtLetter !== courtKey && r.secondCourtLetter !== courtKey
+    ))
+
+    // Drop any note attached to the cancelled court — it no longer applies.
+    setCourtNotes(prev => {
+      if (!(courtKey in prev)) return prev
+      const next = { ...prev }
+      delete next[courtKey]
+      return next
+    })
+  }, [])
+
+  /**
+   * Adds a new rotation pairing row for the given location.
+   * Defaults to the first two courts at that location not already part of
+   * another pairing. If fewer than two unpaired courts remain, the row is
+   * still added with whatever is available — the organiser can adjust via
+   * the dropdowns, and an empty selection is treated as "incomplete pairing"
+   * (excluded from the Approve payload).
+   *
+   * @param {number} locationId
+   */
+  const handleAddRotation = useCallback((locationId) => {
+    setRotations(prev => {
+      // Letters already claimed by an existing pairing — exclude from defaults.
+      const usedLetters = new Set(prev.flatMap(r => [r.winnersCourtLetter, r.secondCourtLetter]))
+
+      const availableLetters = Object.entries(state.courts)
+        .filter(([key, c]) => c.locationId === locationId && !usedLetters.has(key))
+        .map(([key]) => key)
+        .sort()
+
+      console.log(`[CourtAssignment] Adding rotation pairing for location ${locationId}. Available courts: ${availableLetters.join(', ')}`)
+
+      return [
+        ...prev,
+        {
+          id: crypto.randomUUID(), // local-only React key — not sent to server
+          locationId,
+          winnersCourtLetter: availableLetters[0] ?? '',
+          secondCourtLetter: availableLetters[1] ?? '',
+          rotationType: 'rotate_partners',
+        },
+      ]
+    })
+  }, [state.courts])
+
+  /**
+   * Updates a single field on an existing rotation pairing.
+   * @param {string} id - local rotation row id
+   * @param {string} field - 'winnersCourtLetter' | 'secondCourtLetter' | 'rotationType'
+   * @param {string} value
+   */
+  const handleUpdateRotation = useCallback((id, field, value) => {
+    setRotations(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r))
+  }, [])
+
+  /**
+   * Removes a rotation pairing row entirely. Both courts become unpaired
+   * and free to be selected in other pairing rows.
+   * @param {string} id - local rotation row id
+   */
+  const handleRemoveRotation = useCallback((id) => {
+    console.log(`[CourtAssignment] Removing rotation pairing ${id}`)
+    setRotations(prev => prev.filter(r => r.id !== id))
+  }, [])
+
+  /**
+   * Updates the freeform note for a given court letter.
+   * @param {string} courtLetter
+   * @param {string} value
+   */
+  const handleUpdateCourtNote = useCallback((courtLetter, value) => {
+    setCourtNotes(prev => ({ ...prev, [courtLetter]: value }))
   }, [])
 
   // ---------------------------------------------------------------------------
@@ -391,13 +493,41 @@ export default function CourtAssignmentClient({
       sessionId: p.sessionId,
     }))
 
-    console.log(`[CourtAssignment] Approving — ${assignments.length} assignment(s), ${cancelledPlayers.length} cancellation(s)`)
+    // Build the rotations payload — only include pairings where both courts
+    // are selected. An incomplete pairing (organiser added a row but didn't
+    // finish selecting both courts) is silently dropped rather than sent
+    // half-formed.
+    const rotationPairs = rotations
+      .filter(r => r.winnersCourtLetter && r.secondCourtLetter)
+      .map(r => ({
+        winnersCourtLetter: r.winnersCourtLetter,
+        secondCourtLetter: r.secondCourtLetter,
+        rotationType: r.rotationType,
+      }))
+
+    // Build the notes payload — only include non-empty, trimmed notes.
+    const notes = Object.entries(courtNotes)
+      .filter(([, note]) => note?.trim())
+      .map(([courtLetter, note]) => ({ courtLetter, note: note.trim() }))
+
+    console.log(
+      `[CourtAssignment] Approving — ${assignments.length} assignment(s), ` +
+      `${cancelledPlayers.length} cancellation(s), ${rotationPairs.length} rotation pair(s), ` +
+      `${notes.length} note(s)`
+    )
 
     try {
       const res = await fetch(`/api/admin/court-assignment/${anchorSessionId}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assignments, cancelledPlayers }),
+        body: JSON.stringify({
+          assignments,
+          cancelledPlayers,
+          weekId,
+          sessionDate,
+          rotations: rotationPairs,
+          courtNotes: notes,
+        }),
       })
 
       const data = await res.json()
@@ -419,7 +549,7 @@ export default function CourtAssignmentClient({
     } finally {
       setSubmitting(false)
     }
-  }, [canApprove, submitting, state, anchorSessionId])
+  }, [canApprove, submitting, state, anchorSessionId, weekId, sessionDate, rotations, courtNotes])
 
   // ---------------------------------------------------------------------------
   // Already finalised — show read-only confirmation screen.
@@ -585,9 +715,37 @@ export default function CourtAssignmentClient({
                     onMove={handleMovePlayer}
                   />
                 ))}
+
+                {/* Optional per-court note — freeform, shown to players in
+                    the assignment email and on the printed lineup sheet. */}
+                <div style={styles.noteRow}>
+                  <label style={styles.noteLabel} htmlFor={`court-note-${courtKey}`}>
+                    Note for this court (optional)
+                  </label>
+                  <input
+                    id={`court-note-${courtKey}`}
+                    type='text'
+                    value={courtNotes[courtKey] ?? ''}
+                    onChange={e => handleUpdateCourtNote(courtKey, e.target.value)}
+                    placeholder='e.g. Joe & John keep partners all day'
+                    style={styles.noteInput}
+                  />
+                </div>
               </div>
             )
           })}
+
+          {/* Rotations panel — only meaningful with 2+ courts at this location */}
+          {Object.keys(locData.courts).length >= 2 && (
+            <RotationsPanel
+              locationId={locData.locationId}
+              courtsAtLocation={locData.courts}
+              rotations={rotations.filter(r => r.locationId === locData.locationId)}
+              onAdd={handleAddRotation}
+              onUpdate={handleUpdateRotation}
+              onRemove={handleRemoveRotation}
+            />
+          )}
         </div>
       ))}
 
@@ -731,6 +889,148 @@ function UnassignedPlayerRow({ player, allCourtLetters, courts, onMove }) {
     </div>
   )
 }
+
+// ---------------------------------------------------------------------------
+// RotationsPanel — manages racquet-rotation pairings for one location.
+//
+// Each pairing row lets the organiser pick two courts at this location,
+// designate which is the "winners" court, and choose whether partners
+// switch each set or stay together. A court can appear in at most one
+// pairing — the dropdown options exclude letters already used by OTHER
+// pairing rows (but still allow this row's own current selections).
+// ---------------------------------------------------------------------------
+function RotationsPanel({ locationId, courtsAtLocation, rotations, onAdd, onUpdate, onRemove }) {
+  // All court letters at this location, sorted for stable dropdown ordering.
+  const courtLetters = Object.keys(courtsAtLocation).sort()
+
+  // Letters used by OTHER pairings (not the one currently being rendered) —
+  // computed per-row below since "other" depends on which row we're in.
+  const usedByPairing = (excludeId) => {
+    const used = new Set()
+    for (const r of rotations) {
+      if (r.id === excludeId) continue
+      if (r.winnersCourtLetter) used.add(r.winnersCourtLetter)
+      if (r.secondCourtLetter) used.add(r.secondCourtLetter)
+    }
+    return used
+  }
+
+  // Whether there are at least 2 unpaired courts left to start a new pairing.
+  const allUsed = new Set(rotations.flatMap(r => [r.winnersCourtLetter, r.secondCourtLetter]))
+  const unpairedCount = courtLetters.filter(l => !allUsed.has(l)).length
+  const canAddMore = unpairedCount >= 2
+
+  return (
+    <div style={styles.rotationsPanel}>
+      <h3 style={styles.rotationsHeading}>Rotations</h3>
+
+      {rotations.length === 0 && (
+        <p style={styles.rotationsEmptyNote}>
+          No courts are paired for rotation. Add a pairing if these courts should rotate players.
+        </p>
+      )}
+
+      {rotations.map(r => {
+        const excluded = usedByPairing(r.id)
+
+        return (
+          <div key={r.id} style={styles.rotationRow}>
+            {/* Winners court selector */}
+            <select
+              value={r.winnersCourtLetter}
+              onChange={e => onUpdate(r.id, 'winnersCourtLetter', e.target.value)}
+              style={styles.rotationSelect}
+              aria-label='Winners court'
+            >
+              <option value=''>— court —</option>
+              {courtLetters.map(letter => (
+                <option
+                  key={letter}
+                  value={letter}
+                  // Allow this row's own current selections even if "used".
+                  disabled={excluded.has(letter) && letter !== r.winnersCourtLetter}
+                >
+                  Court {letter}
+                </option>
+              ))}
+            </select>
+
+            <span style={styles.rotationConnector}>↔ rotates with</span>
+
+            {/* Second court selector */}
+            <select
+              value={r.secondCourtLetter}
+              onChange={e => onUpdate(r.id, 'secondCourtLetter', e.target.value)}
+              style={styles.rotationSelect}
+              aria-label='Second court'
+            >
+              <option value=''>— court —</option>
+              {courtLetters.map(letter => (
+                <option
+                  key={letter}
+                  value={letter}
+                  disabled={excluded.has(letter) && letter !== r.secondCourtLetter}
+                >
+                  Court {letter}
+                </option>
+              ))}
+            </select>
+
+            {/* Which court is "winners" */}
+            <div style={styles.rotationSubRow}>
+              <label style={styles.rotationSubLabel}>Winners court:</label>
+              <select
+                value={r.winnersCourtLetter}
+                onChange={e => {
+                  // Swap winners/second so the chosen letter becomes winners.
+                  const newWinners = e.target.value
+                  const newSecond = newWinners === r.winnersCourtLetter ? r.secondCourtLetter : r.winnersCourtLetter
+                  onUpdate(r.id, 'winnersCourtLetter', newWinners)
+                  onUpdate(r.id, 'secondCourtLetter', newSecond)
+                }}
+                style={styles.rotationSelectSmall}
+                aria-label='Which court is the winners court'
+              >
+                {[r.winnersCourtLetter, r.secondCourtLetter].filter(Boolean).map(letter => (
+                  <option key={letter} value={letter}>Court {letter}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Partner behaviour */}
+            <div style={styles.rotationSubRow}>
+              <label style={styles.rotationSubLabel}>Partners:</label>
+              <select
+                value={r.rotationType}
+                onChange={e => onUpdate(r.id, 'rotationType', e.target.value)}
+                style={styles.rotationSelectSmall}
+                aria-label='Partner rotation type'
+              >
+                <option value='rotate_partners'>Switch each set</option>
+                <option value='keep_partners'>Keep same partner</option>
+              </select>
+            </div>
+
+            <button
+              onClick={() => onRemove(r.id)}
+              style={styles.removeRotationButton}
+              aria-label='Remove this rotation pairing'
+            >
+              Remove
+            </button>
+          </div>
+        )
+      })}
+
+      {canAddMore && (
+        <button onClick={() => onAdd(locationId)} style={styles.addRotationButton}>
+          + Add rotation pairing
+        </button>
+      )}
+    </div>
+  )
+}
+
 
 // ---------------------------------------------------------------------------
 // Inline styles — mobile-first, consistent with existing TGM admin UI.
@@ -922,5 +1222,114 @@ const styles = {
     borderRadius: '10px',
     padding: '16px',
     marginBottom: '16px',
+  },
+
+  // -------------------------------------------------------------------------
+  // Per-court note field
+  // -------------------------------------------------------------------------
+  noteRow: {
+    marginTop: '8px',
+  },
+  noteLabel: {
+    display: 'block',
+    fontSize: '12px',
+    color: '#9ca3af',
+    marginBottom: '4px',
+  },
+  noteInput: {
+    width: '100%',
+    fontSize: '14px',
+    padding: '8px 10px',
+    borderRadius: '6px',
+    border: '1px solid #d1d5db',
+    background: '#fff',
+    color: '#111',
+    boxSizing: 'border-box',
+  },
+
+  // -------------------------------------------------------------------------
+  // Rotations panel
+  // -------------------------------------------------------------------------
+  rotationsPanel: {
+    border: '1px solid #e5e7eb',
+    borderRadius: '10px',
+    padding: '16px',
+    marginTop: '8px',
+    marginBottom: '12px',
+    background: '#f9fafb',
+  },
+  rotationsHeading: {
+    fontSize: '15px',
+    fontWeight: '600',
+    color: '#374151',
+    margin: '0 0 8px 0',
+  },
+  rotationsEmptyNote: {
+    fontSize: '13px',
+    color: '#6b7280',
+    margin: '0 0 8px 0',
+    lineHeight: '1.5',
+  },
+  rotationRow: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: '8px',
+    padding: '10px',
+    background: '#fff',
+    border: '1px solid #e5e7eb',
+    borderRadius: '8px',
+    marginBottom: '8px',
+  },
+  rotationSelect: {
+    fontSize: '14px',
+    padding: '6px 8px',
+    borderRadius: '6px',
+    border: '1px solid #d1d5db',
+    background: '#fff',
+    color: '#111',
+  },
+  rotationConnector: {
+    fontSize: '13px',
+    color: '#6b7280',
+    whiteSpace: 'nowrap',
+  },
+  rotationSubRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
+  rotationSubLabel: {
+    fontSize: '13px',
+    color: '#6b7280',
+    whiteSpace: 'nowrap',
+  },
+  rotationSelectSmall: {
+    fontSize: '13px',
+    padding: '5px 8px',
+    borderRadius: '6px',
+    border: '1px solid #d1d5db',
+    background: '#fff',
+    color: '#111',
+  },
+  removeRotationButton: {
+    marginLeft: 'auto',
+    background: 'transparent',
+    border: '1px solid #f87171',
+    color: '#dc2626',
+    borderRadius: '6px',
+    padding: '5px 10px',
+    fontSize: '13px',
+    cursor: 'pointer',
+  },
+  addRotationButton: {
+    background: 'transparent',
+    border: '1px dashed #9ca3af',
+    color: '#374151',
+    borderRadius: '6px',
+    padding: '8px 12px',
+    fontSize: '14px',
+    cursor: 'pointer',
+    width: '100%',
   },
 }

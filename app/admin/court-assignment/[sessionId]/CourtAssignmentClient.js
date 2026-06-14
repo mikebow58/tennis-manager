@@ -1139,7 +1139,12 @@ function ConfirmationView({
       const partnerText = r.rotationType === 'keep_partners'
         ? 'keeping the same partner'
         : 'switching partners each set'
-      return { id: r.id, winnersLabel, secondLabel, partnerText }
+      // Both courts in a pairing are always at the same location (enforced
+      // by the Rotations panel — pairings are per-location). Use either
+      // side's locationName; fall back to winnersCourt if secondCourt is
+      // somehow missing.
+      const locationName = winnersCourt?.locationName ?? secondCourt?.locationName ?? null
+      return { id: r.id, winnersLabel, secondLabel, partnerText, locationName }
     })
 
   // Build a flat list of court notes with player-friendly court labels.
@@ -1150,7 +1155,7 @@ function ConfirmationView({
       const label = court?.courtNumber != null
         ? `Court ${court.courtNumber}`
         : `Court ${courtLetter}`
-      return { courtLetter, label, note: note.trim() }
+      return { courtLetter, label, locationName: court?.locationName ?? null, note: note.trim() }
     })
 
   return (
@@ -1214,6 +1219,7 @@ function ConfirmationView({
           <h2 style={styles.summarySectionHeading}>Rotations</h2>
           {rotationRows.map(r => (
             <p key={r.id} style={styles.summaryLine}>
+              {r.locationName ? <strong>{r.locationName}: </strong> : null}
               {r.winnersLabel} and {r.secondLabel} are paired — {r.winnersLabel} is the winner's court, {r.partnerText}.
             </p>
           ))}
@@ -1226,7 +1232,7 @@ function ConfirmationView({
           <h2 style={styles.summarySectionHeading}>Court notes</h2>
           {noteRows.map(n => (
             <p key={n.courtLetter} style={styles.summaryLine}>
-              <strong>{n.label}:</strong> {n.note}
+              <strong>{n.locationName ? `${n.locationName} — ` : ''}{n.label}:</strong> {n.note}
             </p>
           ))}
         </div>

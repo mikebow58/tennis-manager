@@ -491,20 +491,42 @@ export async function POST(request, context) {
     .eq('week_id', dayWeekId)
     .eq('session_date', daySessionDate)
 
+  // courtNumberByLetter: court_letter -> organiser-assigned court_number.
+  // Built from the assignments just read — used to render rotation labels
+  // with real-world court numbers instead of internal letters.
+  const courtNumberByLetter = {}
+  for (const a of assignments) {
+    if (a.court_number != null) {
+      courtNumberByLetter[a.court_letter] = a.court_number
+    }
+  }
+
   // rotationLabelByLetter: court_letter -> human-readable rotation sentence.
   // Built from both sides of each pairing so each court gets its own framing
   // (the winners court vs. the second court read slightly differently).
+  // Player-facing text uses court NUMBERS (what's in the info box above),
+  // not internal letters. Falls back to "Court [letter]" only if a number
+  // hasn't been assigned for that side — keeps the sentence readable even
+  // in an incomplete-numbering edge case.
   const rotationLabelByLetter = {}
   for (const r of dayRotations ?? []) {
     const partnerText = r.rotation_type === 'keep_partners'
       ? 'Keeping the same partner.'
       : 'Switching partners each set.'
 
+    const winnersLabel = courtNumberByLetter[r.winners_court_letter] != null
+      ? `Court ${courtNumberByLetter[r.winners_court_letter]}`
+      : `Court ${r.winners_court_letter}`
+
+    const secondLabel = courtNumberByLetter[r.second_court_letter] != null
+      ? `Court ${courtNumberByLetter[r.second_court_letter]}`
+      : `Court ${r.second_court_letter}`
+
     rotationLabelByLetter[r.winners_court_letter] =
-      `Court ${r.winners_court_letter} (winner's court), rotating with Court ${r.second_court_letter}. ${partnerText}`
+      `${winnersLabel} (winner's court), rotating with ${secondLabel}. ${partnerText}`
 
     rotationLabelByLetter[r.second_court_letter] =
-      `Court ${r.second_court_letter}, rotating with Court ${r.winners_court_letter} (winner's court). ${partnerText}`
+      `${secondLabel}, rotating with ${winnersLabel} (winner's court). ${partnerText}`
   }
 
   // courtNoteByLetter: court_letter -> freeform organiser note text.

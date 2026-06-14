@@ -407,6 +407,41 @@ export async function POST(request, context) {
   if (resolvedAssignments?.length) {
     console.log(`[api/admin/court-assignment/approve] Applying ${resolvedAssignments.length} override assignment(s).`)
 
+    // ---------------------------------------------------------------------
+    // Delete stale rows for players whose court moved to a DIFFERENT
+    // session (i.e. a different location) than their existing
+    // court_assignments row. The upsert below uses onConflict on
+    // (player_id, session_id) — if a player's session_id changed (court
+    // moved location), the old row's key no longer matches the new row's
+    // key, so upsert would INSERT a second row rather than replacing the
+    // first, leaving an orphaned row (often with court_number = null) that
+    // both inflates email counts and trips the "missing court numbers"
+    // warning for the whole day.
+    //
+    // Fix: for every player being (re)assigned, delete ALL of their existing
+    // court_assignments rows across every session for this day BEFORE the
+    // upsert — guarantees exactly one row per player per day regardless of
+    // which session/location they end up on.
+    // ---------------------------------------------------------------------
+    const playerIdsInAssignments = [...new Set(resolvedAssignments.map((a) => a.playerId))]
+
+    const { error: staleDeleteError } = await supabaseAdmin
+      .from('court_assignments')
+      .delete()
+      .in('session_id', sessionIds)
+      .in('player_id', playerIdsInAssignments)
+
+    if (staleDeleteError) {
+      console.error(
+        `[api/admin/court-assignment/approve] Failed to clear existing court_assignments before upsert:`,
+        staleDeleteError.message
+      )
+      return Response.json(
+        { status: 'error', message: `court_assignments cleanup failed: ${staleDeleteError.message}` },
+        { status: 500 }
+      )
+    }
+
     const caRows = resolvedAssignments.map((a) => ({
       session_id: a.sessionId,
       player_id: a.playerId,
@@ -417,14 +452,17 @@ export async function POST(request, context) {
       updated_at: new Date().toISOString(),
     }))
 
+    // Plain insert now that any prior rows for these players have been
+    // cleared — no upsert/onConflict needed, since there's nothing left
+    // to conflict with.
     const { error: upsertError } = await supabaseAdmin
       .from('court_assignments')
-      .upsert(caRows, { onConflict: 'player_id,session_id', ignoreDuplicates: false })
+      .insert(caRows)
 
     if (upsertError) {
-      console.error(`[api/admin/court-assignment/approve] court_assignments upsert failed:`, upsertError.message)
+      console.error(`[api/admin/court-assignment/approve] court_assignments insert failed:`, upsertError.message)
       return Response.json(
-        { status: 'error', message: `court_assignments upsert failed: ${upsertError.message}` },
+        { status: 'error', message: `court_assignments insert failed: ${upsertError.message}` },
         { status: 500 }
       )
     }

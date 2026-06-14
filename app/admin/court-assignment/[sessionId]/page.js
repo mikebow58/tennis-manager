@@ -128,6 +128,8 @@ export default async function CourtAssignmentPage({ params }) {
       status,
       cancelled_at,
       court_assignment_sent_at,
+      format,
+      notes,
       locations ( id, name, total_courts )
     `)
     .eq('week_id', anchorSession.week_id)
@@ -219,6 +221,25 @@ export default async function CourtAssignmentPage({ params }) {
   const alreadyFinalised = daySessions.some(s => s.court_assignment_sent_at != null)
 
   // ---------------------------------------------------------------------------
+  // 8.5. Fetch all active locations — used to populate the "Move court to"
+  //    dropdown with locations not currently part of this day (e.g. adding
+  //    Boulder Park as a destination on a day that was originally
+  //    Memorial-Park-only). total_courts is the soft upper-bound used by the
+  //    capacity check for newly-added locations on the confirmation view.
+  // ---------------------------------------------------------------------------
+  const { data: activeLocations, error: locationsError } = await supabaseAdmin
+    .from('locations')
+    .select('id, name, total_courts')
+    .eq('active', true)
+    .order('name', { ascending: true })
+
+  if (locationsError) {
+    console.error('[court-assignment page] Could not load active locations:', locationsError.message)
+    // Non-fatal — the move-to-new-location feature simply won't have options
+    // beyond locations already on this day. The rest of the page still works.
+  }
+
+  // ---------------------------------------------------------------------------
   // 9. Pass all data to the client component as plain serialisable props.
   //    No Supabase clients, no server-only imports cross the server/client boundary.
   // ---------------------------------------------------------------------------
@@ -231,6 +252,7 @@ export default async function CourtAssignmentPage({ params }) {
       daySessions={daySessions}
       courtAssignments={courtAssignments ?? []}
       availabilityRecords={availabilityRecords ?? []}
+      activeLocations={activeLocations ?? []}
       alreadyFinalised={alreadyFinalised}
     />
   )

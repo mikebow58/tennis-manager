@@ -3,24 +3,44 @@
 /**
  * CourtAssignmentClient.js
  *
- * Interactive court assignment review and approval UI. All changes on this
- * screen are LOCAL STATE only — nothing writes to the database or sends any
- * email until the organiser clicks Approve.
+ * Interactive court assignment review and approval UI, in two steps:
  *
- * This component is the staging area for:
+ *   STEP 1 — 'edit': the staging editor. All changes are LOCAL STATE only —
+ *     nothing writes to the database or sends any email here.
+ *   STEP 2 — 'confirm': a plain-language summary of the staged state.
+ *     "Back to edit" returns to step 1 with all state intact. "Confirm and
+ *     notify players" fires the actual Approve POST.
+ *
+ * STEP 1 — EDIT — is the staging area for:
  *   1. Assigning real-world court numbers to court letters (A → 3, B → 1, etc.)
  *   2. Moving players between courts (via dropdown reassignment)
  *   3. Cancelling incomplete courts (moves players to an unassigned pool)
  *   4. Configuring racquet-rotation pairings between courts at the same location
  *   5. Adding optional freeform per-court notes (e.g. non-standard instructions)
- *   6. Approving — commits all changes in one transaction and sends emails
+ *   6. "Review changes" — advances to step 2 (confirm). Nothing is sent yet.
  *
- * VALIDATION:
- *   - Every active court card must have exactly 4 players before Approve is enabled.
- *   - Court numbers must be unique per location (duplicates shown as inline warning,
- *     Approve disabled).
- *   - Players in the unassigned pool are implicitly cancelled on Approve — they
- *     receive sendCourtCancellationNotice, not an assignment email.
+ * STEP 2 — CONFIRM — shows:
+ *   - Per-location summary: court count, player count, court-by-court roster
+ *   - Capacity check per location (HARD STOP if over capacity — see below)
+ *   - Rotation pairings in plain language
+ *   - Court notes
+ *   - Cancellations (players who will receive a "not playing" notice)
+ *   - Email summary — counts of assignment vs. cancellation emails
+ *   - "Confirm and notify players" — commits all changes in one transaction
+ *
+ * HARD STOP — CAPACITY:
+ *   If a court-to-location move results in a location having more courts
+ *   assigned than it has courts_available, confirmation is blocked entirely.
+ *   This is the one hard stop in the flow — it represents a physical
+ *   impossibility (no such court exists), unlike the missing-court-number
+ *   soft warning which the system proceeds past.
+ *
+ * VALIDATION (gates "Review changes", step 1 → step 2):
+ *   - Every active court card must have exactly 4 players.
+ *   - Court numbers must be unique per location (duplicates shown as inline
+ *     warning).
+ *   - Players in the unassigned pool are implicitly cancelled on confirm —
+ *     they receive sendCourtCancellationNotice, not an assignment email.
  *
  * ROTATIONS & NOTES:
  *   - Rotation pairings link two courts at the same location for "winners up,
@@ -126,6 +146,7 @@ function buildInitialState(daySessions, courtAssignments, availabilityRecords) {
         locationId: ca.location_id,
         locationName: session.locations?.name ?? 'Unknown location',
         courtsAvailable: session.courts_available ?? 8,
+        totalCourts: session.locations?.total_courts ?? null,
         players: [],
       }
     }
@@ -167,6 +188,7 @@ export default function CourtAssignmentClient({
   daySessions,
   courtAssignments,
   availabilityRecords,
+  activeLocations,
   alreadyFinalised,
 }) {
   // ---------------------------------------------------------------------------
@@ -186,6 +208,11 @@ export default function CourtAssignmentClient({
   // Per-court freeform notes. Keyed by court letter. Empty/missing = no note.
   const [courtNotes, setCourtNotes] = useState({})
 
+  // Two-step flow: 'edit' (the staging editor) -> 'confirm' (plain-language
+  // review before the actual Approve POST fires). 'Back to edit' returns to
+  // 'edit' with all state intact — nothing is re-fetched or reset.
+  const [step, setStep] = useState('edit')
+
   // Submission state — tracks in-progress and result of the Approve POST.
   const [submitting, setSubmitting] = useState(false)
   const [submitResult, setSubmitResult] = useState(null) // null | { ok, warning, error }
@@ -200,7 +227,12 @@ export default function CourtAssignmentClient({
     for (const [key, court] of Object.entries(state.courts)) {
       const locName = court.locationName
       if (!grouped[locName]) {
-        grouped[locName] = { locationId: court.locationId, courtsAvailable: court.courtsAvailable, courts: {} }
+        grouped[locName] = {
+          locationId: court.locationId,
+          courtsAvailable: court.courtsAvailable,
+          totalCourts: court.totalCourts ?? null,
+          courts: {},
+        }
       }
       grouped[locName].courts[key] = court
     }
@@ -236,7 +268,52 @@ export default function CourtAssignmentClient({
   // Approve is enabled only when all courts have exactly 4 players AND no duplicate numbers.
   const canApprove = invalidCourts.length === 0 && duplicateCourtNumbers.size === 0
 
-  // Build a human-readable validation message for display below the Approve button.
+  // Build a per-location summary for the confirmation view: court count vs.
+  // courtsAvailable, plus the hard-stop capacity check. A location is "over
+  // capacity" if more courts are currently assigned to it than it has
+  // available — this can only happen via a court-to-location move, since
+  // Procedure 2's original output never exceeds capacity.
+  const locationSummaries = useMemo(() => {
+    const summaries = []
+    for (const [locName, locData] of Object.entries(courtsByLocation)) {
+      const courtCount = Object.keys(locData.courts).length
+
+      // For locations already on this day, courtsAvailable (from the
+      // existing session) is the capacity bound. For a brand-new location
+      // (courtsAvailable === null — no session exists yet), there's no
+      // fixed session capacity; totalCourts (locations.total_courts) is
+      // used instead as a soft upper bound on the venue's physical courts.
+      const isNewLocation = locData.courtsAvailable == null
+      const capacityBound = isNewLocation ? locData.totalCourts : locData.courtsAvailable
+
+      summaries.push({
+        locationName: locName,
+        locationId: locData.locationId,
+        courtsAvailable: locData.courtsAvailable,
+        totalCourts: locData.totalCourts,
+        isNewLocation,
+        courtCount,
+        playerCount: courtCount * 4, // every active court has exactly 4 by the time we reach confirm
+        // If neither courtsAvailable nor totalCourts is known, skip the
+        // capacity check entirely rather than false-flagging — this should
+        // be rare (every active location should have total_courts set).
+        overCapacity: capacityBound != null && courtCount > capacityBound,
+        capacityBound,
+      })
+    }
+    return summaries
+  }, [courtsByLocation])
+
+  // Hard stop: any location with more assigned courts than it has available.
+  // Unlike the missing-court-number soft warning, this represents a physical
+  // impossibility (no such court exists) and blocks confirmation entirely.
+  const overCapacityLocations = useMemo(
+    () => locationSummaries.filter(s => s.overCapacity),
+    [locationSummaries]
+  )
+
+  // Build a human-readable validation message for display below the
+  // "Review changes" button on the edit view.
   const validationMessage = useMemo(() => {
     const messages = []
     for (const { letter, count } of invalidCourts) {
@@ -248,6 +325,62 @@ export default function CourtAssignmentClient({
     }
     return messages
   }, [invalidCourts, duplicateCourtNumbers])
+
+  // Email summary counts for the confirmation view — plain-language version
+  // of what the Approve POST will actually do.
+  const assignmentEmailCount = useMemo(
+    () => Object.values(state.courts).reduce((sum, c) => sum + c.players.length, 0),
+    [state.courts]
+  )
+  const cancellationEmailCount = state.unassigned.length
+
+  // All distinct locations present on this day, PLUS any other active
+  // location not yet part of this day — used to populate the "Move court to"
+  // dropdown. Each entry retains its sessionId, since moving a court to a
+  // new location means its players' availability records belong to that
+  // location's session.
+  //
+  // Locations already on this day: real sessionId, real courtsAvailable
+  // (from the existing session record).
+  //
+  // Other active locations: sessionId is a placeholder string
+  // ("new:<locationId>") meaning "no session exists yet — create one on
+  // Approve". courtsAvailable is null; capacity for these is checked against
+  // totalCourts (locations.total_courts, a soft upper bound) in the
+  // confirmation view instead.
+  const allLocations = useMemo(() => {
+    const seen = new Map()
+
+    // Locations already on this day.
+    for (const court of Object.values(state.courts)) {
+      if (!seen.has(court.locationId)) {
+        seen.set(court.locationId, {
+          locationId: court.locationId,
+          locationName: court.locationName,
+          sessionId: court.sessionId,
+          courtsAvailable: court.courtsAvailable,
+          totalCourts: court.totalCourts ?? null,
+          isNew: false,
+        })
+      }
+    }
+
+    // Other active locations not yet on this day.
+    for (const loc of activeLocations ?? []) {
+      if (!seen.has(loc.id)) {
+        seen.set(loc.id, {
+          locationId: loc.id,
+          locationName: loc.name,
+          sessionId: `new:${loc.id}`, // placeholder — resolved to a real session on Approve
+          courtsAvailable: null,      // capacity = however many courts end up here
+          totalCourts: loc.total_courts ?? null,
+          isNew: true,
+        })
+      }
+    }
+
+    return Array.from(seen.values())
+  }, [state.courts, activeLocations])
 
   // ---------------------------------------------------------------------------
   // Handlers — all update local state only; no API calls until Approve.
@@ -348,6 +481,72 @@ export default function CourtAssignmentClient({
         },
       }
     })
+  }, [])
+
+  /**
+   * Moves an entire court (and all its players) to a different location.
+   * Updates locationId, locationName, sessionId, and courtsAvailable on the
+   * court object, and locationId/sessionId on each of its players.
+   *
+   * The court's previously-selected court number is reset to unassigned —
+   * court numbers are constrained per-location (a number valid at the old
+   * location may not exist or may already be taken at the new one), so
+   * forcing a fresh selection avoids carrying over a now-meaningless value.
+   *
+   * Any rotation pairing or note referencing this court is also cleared,
+   * since rotation pairings are scoped to courts at the same location and
+   * a moved court may no longer have a valid partner at its new location.
+   *
+   * @param {string} courtKey - Letter of the court being moved
+   * @param {object} destination - { locationId, locationName, sessionId, courtsAvailable }
+   */
+  const handleMoveCourtToLocation = useCallback((courtKey, destination) => {
+    setState(prev => {
+      const court = prev.courts[courtKey]
+      if (!court) return prev
+
+      console.log(
+        `[CourtAssignment] Moving Court ${courtKey} (${court.players.length} players) ` +
+        `from ${court.locationName} to ${destination.locationName}`
+      )
+
+      const movedPlayers = court.players.map(p => ({
+        ...p,
+        sessionId: destination.sessionId,
+        locationId: destination.locationId,
+      }))
+
+      return {
+        ...prev,
+        courts: {
+          ...prev.courts,
+          [courtKey]: {
+            ...court,
+            locationId: destination.locationId,
+            locationName: destination.locationName,
+            sessionId: destination.sessionId,
+            // For an existing-session destination, use its real
+            // courts_available. For a brand-new location (placeholder
+            // sessionId), there's no fixed capacity yet — courtNumberSelect
+            // falls back to a generous default range (see render) until a
+            // real session/capacity exists.
+            courtsAvailable: destination.courtsAvailable,
+            totalCourts: destination.totalCourts,
+            courtNumber: null, // reset — old number may be invalid/taken at new location
+            players: movedPlayers,
+          },
+        },
+      }
+    })
+
+    // A moved court can no longer be part of a rotation pairing — rotation
+    // pairings only make sense between courts at the same location.
+    setRotations(prev => prev.filter(r =>
+      r.winnersCourtLetter !== courtKey && r.secondCourtLetter !== courtKey
+    ))
+
+    // The note stays with the court conceptually, so we don't clear it here —
+    // unlike rotation pairings, a freeform note isn't location-dependent.
   }, [])
 
   /**
@@ -486,6 +685,30 @@ export default function CourtAssignmentClient({
       }
     }
 
+    // Build the newSessions payload — one entry per placeholder location
+    // (sessionId starting with "new:") that has at least one court assigned
+    // to it. The approval route creates a real sessions row for each,
+    // copying session_date/week_id/start_time/format/notes from the anchor
+    // session, with courts_available = however many courts ended up there.
+    // assignments[].sessionId for these courts will still be the placeholder
+    // string ("new:<locationId>") — the approval route resolves it to the
+    // newly-created session's real id before writing court_assignments.
+    const usedPlaceholderLocationIds = new Set(
+      Object.values(state.courts)
+        .filter(c => typeof c.sessionId === 'string' && c.sessionId.startsWith('new:'))
+        .map(c => c.locationId)
+    )
+
+    const newSessions = Array.from(usedPlaceholderLocationIds).map(locationId => {
+      const courtsForLocation = Object.values(state.courts)
+        .filter(c => c.locationId === locationId)
+      return {
+        placeholderSessionId: `new:${locationId}`,
+        locationId,
+        courtsAvailable: courtsForLocation.length,
+      }
+    })
+
     // Build the cancelled players array from the unassigned pool.
     const cancelledPlayers = state.unassigned.map(p => ({
       availabilityId: p.availabilityId,
@@ -513,7 +736,7 @@ export default function CourtAssignmentClient({
     console.log(
       `[CourtAssignment] Approving — ${assignments.length} assignment(s), ` +
       `${cancelledPlayers.length} cancellation(s), ${rotationPairs.length} rotation pair(s), ` +
-      `${notes.length} note(s)`
+      `${notes.length} note(s), ${newSessions.length} new session(s)`
     )
 
     try {
@@ -527,6 +750,7 @@ export default function CourtAssignmentClient({
           sessionDate,
           rotations: rotationPairs,
           courtNotes: notes,
+          newSessions,
         }),
       })
 
@@ -595,7 +819,32 @@ export default function CourtAssignmentClient({
   }
 
   // ---------------------------------------------------------------------------
-  // Main render — the staging UI.
+  // Confirmation view — shown when step === 'confirm'. Plain-language summary
+  // of the staged state, with the capacity hard-stop and the actual Approve
+  // POST trigger.
+  // ---------------------------------------------------------------------------
+  if (step === 'confirm') {
+    return (
+      <ConfirmationView
+        sessionDateLabel={sessionDateLabel}
+        locationSummaries={locationSummaries}
+        overCapacityLocations={overCapacityLocations}
+        courtsByLocation={courtsByLocation}
+        rotations={rotations}
+        courtNotes={courtNotes}
+        unassigned={state.unassigned}
+        assignmentEmailCount={assignmentEmailCount}
+        cancellationEmailCount={cancellationEmailCount}
+        submitting={submitting}
+        submitResult={submitResult}
+        onBack={() => setStep('edit')}
+        onConfirm={handleApprove}
+      />
+    )
+  }
+
+  // ---------------------------------------------------------------------------
+  // Main render — the staging UI (edit view).
   // ---------------------------------------------------------------------------
   return (
     <div style={styles.page}>
@@ -604,8 +853,9 @@ export default function CourtAssignmentClient({
         <h1 style={styles.title}>Court Assignment</h1>
         <p style={styles.subtitle}>{sessionDateLabel}</p>
         <p style={styles.instructions}>
-          Assign court numbers, move players if needed, then tap Approve to notify everyone.
-          Changes on this screen are not saved until you approve.
+          Assign court numbers, move players, and set up rotations as needed.
+          Tap "Review changes" when ready — nothing is saved or sent until you
+          confirm on the next screen.
         </p>
       </div>
 
@@ -661,7 +911,10 @@ export default function CourtAssignmentClient({
                       }}
                     >
                       <option value=''>— assign —</option>
-                      {Array.from({ length: locData.courtsAvailable }, (_, i) => i + 1).map(n => (
+                      {Array.from(
+                        { length: locData.courtsAvailable ?? locData.totalCourts ?? 8 },
+                        (_, i) => i + 1
+                      ).map(n => (
                         <option
                           key={n}
                           value={n}
@@ -672,6 +925,38 @@ export default function CourtAssignmentClient({
                       ))}
                     </select>
                   </div>
+
+                  {/* Move entire court to another location — available even
+                      on single-location days, since the organiser may need
+                      to add a new location to the day on the fly (e.g. a
+                      last-minute loss of courts at the original location).
+                      Resets court number on move. */}
+                  {allLocations.length > 1 && (
+                    <div style={styles.courtNumberRow}>
+                      <label style={styles.courtNumberLabel} htmlFor={`court-location-${courtKey}`}>
+                        Move to
+                      </label>
+                      <select
+                        id={`court-location-${courtKey}`}
+                        value=''
+                        onChange={e => {
+                          const dest = allLocations.find(l => String(l.locationId) === e.target.value)
+                          if (dest) handleMoveCourtToLocation(courtKey, dest)
+                        }}
+                        style={styles.courtNumberSelect}
+                        aria-label={`Move Court ${courtKey} to a different location`}
+                      >
+                        <option value=''>— this location —</option>
+                        {allLocations
+                          .filter(l => l.locationId !== court.locationId)
+                          .map(l => (
+                            <option key={l.locationId} value={l.locationId}>
+                              {l.locationName}{l.isNew ? ' (new)' : ''}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  )}
 
                   {/* Cancel court button — only shown on incomplete courts */}
                   {isTentativeCourt && (
@@ -782,20 +1067,235 @@ export default function CourtAssignmentClient({
         </div>
       )}
 
-      {/* Approve button */}
+      {/* Review changes button — advances to the confirmation view.
+          No data is saved or sent yet; handleApprove fires only from
+          the confirmation view's "Confirm and notify players" button. */}
       <div style={styles.approveRow}>
         <button
-          onClick={handleApprove}
-          disabled={!canApprove || submitting}
+          onClick={() => setStep('confirm')}
+          disabled={!canApprove}
           style={{
             ...styles.approveButton,
-            background: canApprove && !submitting ? '#16a34a' : '#9ca3af',
-            cursor: canApprove && !submitting ? 'pointer' : 'not-allowed',
+            background: canApprove ? '#1e3a5f' : '#9ca3af',
+            cursor: canApprove ? 'pointer' : 'not-allowed',
           }}
         >
-          {submitting ? 'Approving…' : `Approve and notify players for ${sessionDateLabel}`}
+          Review changes
         </button>
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ConfirmationView — plain-language review of the staged state before the
+// actual Approve POST fires. Rendered when step === 'confirm'.
+//
+// Sections, in order:
+//   1. Header with "Back to edit" link
+//   2. Per-location summary (courts, players, capacity check)
+//   3. Rotations (if any configured)
+//   4. Court notes (if any entered)
+//   5. Cancellations (if the unassigned pool is non-empty)
+//   6. Email summary (plain-language version of what the POST will do)
+//   7. Action buttons — "Back to edit" / "Confirm and notify players"
+//
+// HARD STOP: if any location is over capacity (more courts assigned than
+// courts_available), confirmation is blocked entirely — this represents a
+// physical impossibility, not a soft "organiser knows best" situation.
+// ---------------------------------------------------------------------------
+function ConfirmationView({
+  sessionDateLabel,
+  locationSummaries,
+  overCapacityLocations,
+  courtsByLocation,
+  rotations,
+  courtNotes,
+  unassigned,
+  assignmentEmailCount,
+  cancellationEmailCount,
+  submitting,
+  submitResult,
+  onBack,
+  onConfirm,
+}) {
+  const isMultiLocation = locationSummaries.length > 1
+  const hasOverCapacity = overCapacityLocations.length > 0
+
+  // Build a flat list of rotation pairings with player-friendly court
+  // number/letter labels for display. Falls back to the letter if a
+  // court number hasn't been assigned yet.
+  const rotationRows = rotations
+    .filter(r => r.winnersCourtLetter && r.secondCourtLetter)
+    .map(r => {
+      const winnersCourt = findCourtByLetter(courtsByLocation, r.winnersCourtLetter)
+      const secondCourt = findCourtByLetter(courtsByLocation, r.secondCourtLetter)
+      const winnersLabel = winnersCourt?.courtNumber != null
+        ? `Court ${winnersCourt.courtNumber}`
+        : `Court ${r.winnersCourtLetter}`
+      const secondLabel = secondCourt?.courtNumber != null
+        ? `Court ${secondCourt.courtNumber}`
+        : `Court ${r.secondCourtLetter}`
+      const partnerText = r.rotationType === 'keep_partners'
+        ? 'keeping the same partner'
+        : 'switching partners each set'
+      return { id: r.id, winnersLabel, secondLabel, partnerText }
+    })
+
+  // Build a flat list of court notes with player-friendly court labels.
+  const noteRows = Object.entries(courtNotes)
+    .filter(([, note]) => note?.trim())
+    .map(([courtLetter, note]) => {
+      const court = findCourtByLetter(courtsByLocation, courtLetter)
+      const label = court?.courtNumber != null
+        ? `Court ${court.courtNumber}`
+        : `Court ${courtLetter}`
+      return { courtLetter, label, note: note.trim() }
+    })
+
+  return (
+    <div style={styles.page}>
+      {/* Header */}
+      <div style={styles.header}>
+        <h1 style={styles.title}>Review for {sessionDateLabel}</h1>
+        <button onClick={onBack} style={styles.backLink}>
+          ← Back to edit
+        </button>
+      </div>
+
+      {/* Per-location summary */}
+      {locationSummaries.map(loc => (
+        <div key={loc.locationName} style={styles.summaryCard}>
+          <h2 style={styles.summaryLocationName}>
+            {loc.locationName}{loc.isNewLocation ? ' (new)' : ''}
+          </h2>
+          <p style={styles.summaryLine}>
+            {loc.courtCount} court{loc.courtCount !== 1 ? 's' : ''}, {loc.playerCount} players
+          </p>
+
+          {/* One line per court showing player names */}
+          {Object.entries(courtsByLocation[loc.locationName].courts)
+            .sort(([, a], [, b]) => {
+              // Sort by court number if both have one; otherwise by letter.
+              if (a.courtNumber != null && b.courtNumber != null) return a.courtNumber - b.courtNumber
+              return a.courtLetter.localeCompare(b.courtLetter)
+            })
+            .map(([courtKey, court]) => {
+              const courtLabel = court.courtNumber != null
+                ? `Court ${court.courtNumber}`
+                : `Court ${court.courtLetter} (number not yet assigned)`
+              const playerNames = court.players.map(p => `${p.firstName} ${p.lastName}`).join(', ')
+              return (
+                <p key={courtKey} style={styles.summaryCourtLine}>
+                  <strong>{courtLabel}</strong> — {playerNames}
+                </p>
+              )
+            })}
+
+          {/* Capacity check */}
+          <p style={{
+            ...styles.summaryCapacityLine,
+            color: loc.overCapacity ? '#dc2626' : '#6b7280',
+          }}>
+            {loc.capacityBound == null
+              ? `${loc.locationName} — ${loc.courtCount} court${loc.courtCount !== 1 ? 's' : ''} assigned (new location)`
+              : loc.overCapacity
+                ? `⚠ ${loc.locationName} has up to ${loc.capacityBound} court${loc.capacityBound !== 1 ? 's' : ''} available, but ${loc.courtCount} ${loc.courtCount !== 1 ? 'are' : 'is'} assigned.`
+                : loc.isNewLocation
+                  ? `${loc.locationName} has up to ${loc.capacityBound} court${loc.capacityBound !== 1 ? 's' : ''} — ${loc.courtCount} assigned ✓`
+                  : `${loc.locationName} has ${loc.capacityBound} court${loc.capacityBound !== 1 ? 's' : ''} available — ${loc.courtCount} assigned ✓`}
+          </p>
+        </div>
+      ))}
+
+      {/* Rotations */}
+      {rotationRows.length > 0 && (
+        <div style={styles.summaryCard}>
+          <h2 style={styles.summarySectionHeading}>Rotations</h2>
+          {rotationRows.map(r => (
+            <p key={r.id} style={styles.summaryLine}>
+              {r.winnersLabel} and {r.secondLabel} are paired — {r.winnersLabel} is the winner's court, {r.partnerText}.
+            </p>
+          ))}
+        </div>
+      )}
+
+      {/* Court notes */}
+      {noteRows.length > 0 && (
+        <div style={styles.summaryCard}>
+          <h2 style={styles.summarySectionHeading}>Court notes</h2>
+          {noteRows.map(n => (
+            <p key={n.courtLetter} style={styles.summaryLine}>
+              <strong>{n.label}:</strong> {n.note}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {/* Cancellations */}
+      {unassigned.length > 0 && (
+        <div style={styles.unassignedSection}>
+          <h2 style={styles.unassignedHeading}>
+            {unassigned.length} player{unassigned.length !== 1 ? 's' : ''} will be notified they are not playing
+          </h2>
+          <p style={styles.unassignedNote}>
+            {unassigned.map(p => `${p.firstName} ${p.lastName}`).join(', ')}
+          </p>
+        </div>
+      )}
+
+      {/* Email summary */}
+      <div style={styles.summaryCard}>
+        <h2 style={styles.summarySectionHeading}>What happens when you confirm</h2>
+        <p style={styles.summaryLine}>
+          {assignmentEmailCount} player{assignmentEmailCount !== 1 ? 's' : ''} will receive their court assignment.
+        </p>
+        {cancellationEmailCount > 0 && (
+          <p style={styles.summaryLine}>
+            {cancellationEmailCount} player{cancellationEmailCount !== 1 ? 's' : ''} will receive a cancellation notice.
+          </p>
+        )}
+      </div>
+
+      {/* Hard-stop capacity warning */}
+      {hasOverCapacity && (
+        <div style={styles.capacityBlock}>
+          <p style={{ margin: '0 0 4px 0', color: '#991b1b', fontWeight: 600 }}>
+            This can't be confirmed yet
+          </p>
+          {overCapacityLocations.map(loc => (
+            <p key={loc.locationName} style={{ margin: '0 0 4px 0', color: '#991b1b', fontSize: '14px' }}>
+              {loc.locationName}{loc.isNewLocation ? '' : ' only'} has up to {loc.capacityBound} court{loc.capacityBound !== 1 ? 's' : ''} available,
+              but {loc.courtCount} {loc.courtCount !== 1 ? 'are' : 'is'} currently assigned there.
+              Move {loc.courtCount - loc.capacityBound} court{(loc.courtCount - loc.capacityBound) !== 1 ? 's' : ''} to another location.
+            </p>
+          ))}
+          <button onClick={onBack} style={styles.backToFixButton}>
+            Back to edit
+          </button>
+        </div>
+      )}
+
+      {/* Action buttons */}
+      {!hasOverCapacity && (
+        <div style={styles.confirmActionsRow}>
+          <button onClick={onBack} style={styles.backButton} disabled={submitting}>
+            Back to edit
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={submitting}
+            style={{
+              ...styles.approveButton,
+              background: submitting ? '#9ca3af' : '#16a34a',
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              flex: 1,
+            }}
+          >
+            {submitting ? 'Sending…' : 'Confirm and notify players'}
+          </button>
+        </div>
+      )}
 
       {/* Error message from a failed submit */}
       {submitResult?.ok === false && (
@@ -803,18 +1303,37 @@ export default function CourtAssignmentClient({
           <p style={{ margin: 0, color: '#991b1b' }}>
             Error: {submitResult.error}
           </p>
+          <p style={{ margin: '8px 0 0 0', color: '#991b1b', fontSize: '13px' }}>
+            Nothing has been sent. You can try again or go back to edit.
+          </p>
         </div>
       )}
     </div>
   )
 }
 
-// ---------------------------------------------------------------------------
-// PlayerRow — one row within a court card.
-// Shows player name, skill level, and a move-to dropdown.
-// ---------------------------------------------------------------------------
+/**
+ * Finds a court object by its letter, searching across all locations.
+ * Used by ConfirmationView to look up court numbers for display.
+ */
+function findCourtByLetter(courtsByLocation, letter) {
+  for (const locData of Object.values(courtsByLocation)) {
+    if (locData.courts[letter]) return locData.courts[letter]
+  }
+  return null
+}
+
+
 function PlayerRow({ player, currentCourtKey, allCourtLetters, courts, onMove }) {
-  const otherCourts = allCourtLetters.filter(k => k !== currentCourtKey)
+  // Restrict moves to courts at the SAME location as the player's current
+  // court. Cross-location moves are court-level only (see "Move to" on the
+  // court card header) — moving an individual player to a different
+  // location's court would leave the court card grouping and the player's
+  // locationId/sessionId out of sync, producing an invalid approval payload.
+  const currentLocationId = courts[currentCourtKey]?.locationId
+  const otherCourts = allCourtLetters.filter(k =>
+    k !== currentCourtKey && courts[k]?.locationId === currentLocationId
+  )
 
   return (
     <div style={styles.playerRow}>
@@ -840,8 +1359,7 @@ function PlayerRow({ player, currentCourtKey, allCourtLetters, courts, onMove })
           <option value=''>Move to…</option>
           {otherCourts.map(courtKey => (
             <option key={courtKey} value={courtKey}>
-              Court {courtKey} — {courts[courtKey]?.locationName ?? ''}
-              {' '}({courts[courtKey]?.players?.length ?? 0}/4)
+              Court {courtKey} ({courts[courtKey]?.players?.length ?? 0}/4)
             </option>
           ))}
         </select>
@@ -1331,5 +1849,87 @@ const styles = {
     fontSize: '14px',
     cursor: 'pointer',
     width: '100%',
+  },
+
+  // -------------------------------------------------------------------------
+  // Confirmation view
+  // -------------------------------------------------------------------------
+  backLink: {
+    background: 'transparent',
+    border: 'none',
+    color: '#2563eb',
+    fontSize: '14px',
+    padding: 0,
+    cursor: 'pointer',
+    textDecoration: 'underline',
+  },
+  summaryCard: {
+    border: '1px solid #e5e7eb',
+    borderRadius: '10px',
+    padding: '16px',
+    marginBottom: '16px',
+    background: '#fff',
+  },
+  summaryLocationName: {
+    fontSize: '17px',
+    fontWeight: '600',
+    color: '#111',
+    margin: '0 0 4px 0',
+  },
+  summarySectionHeading: {
+    fontSize: '15px',
+    fontWeight: '600',
+    color: '#374151',
+    margin: '0 0 8px 0',
+  },
+  summaryLine: {
+    fontSize: '14px',
+    color: '#444',
+    lineHeight: '1.6',
+    margin: '0 0 4px 0',
+  },
+  summaryCourtLine: {
+    fontSize: '14px',
+    color: '#444',
+    lineHeight: '1.6',
+    margin: '4px 0',
+    paddingLeft: '8px',
+  },
+  summaryCapacityLine: {
+    fontSize: '13px',
+    margin: '8px 0 0 0',
+  },
+  capacityBlock: {
+    background: '#fef2f2',
+    border: '1px solid #fca5a5',
+    borderRadius: '10px',
+    padding: '16px',
+    marginBottom: '16px',
+  },
+  backToFixButton: {
+    background: '#1e3a5f',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '8px',
+    padding: '10px 16px',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    marginTop: '8px',
+  },
+  confirmActionsRow: {
+    display: 'flex',
+    gap: '10px',
+    marginBottom: '16px',
+  },
+  backButton: {
+    background: '#fff',
+    color: '#374151',
+    border: '1px solid #d1d5db',
+    borderRadius: '8px',
+    padding: '14px 16px',
+    fontSize: '15px',
+    fontWeight: '500',
+    cursor: 'pointer',
   },
 }

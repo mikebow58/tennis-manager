@@ -51,6 +51,20 @@
  *     note: string,
  *   }>,
  *
+ *   // Optional: locations added to this day on the fly (e.g. organiser
+ *   // moves courts to a location with no existing session for this day —
+ *   // a single-location day becoming multi-location at approval time).
+ *   // For each entry, a new sessions row is created (copying session_date,
+ *   // week_id, start_time, format, and notes from the anchor session,
+ *   // status = 'closed'). placeholderSessionId ("new:<locationId>") is the
+ *   // value used as sessionId in assignments/cancelledPlayers for courts
+ *   // at this location — resolved to the new session's real id internally.
+ *   newSessions?: Array<{
+ *     placeholderSessionId: string,  // "new:<locationId>"
+ *     locationId: number,
+ *     courtsAvailable: number,       // count of courts moved to this location
+ *   }>,
+ *
  *   // Required if rotations or courtNotes are provided — identifies the
  *   // day these records belong to. Sourced from anchorSession server-side
  *   // when available; included here for client-side construction.
@@ -61,19 +75,23 @@
  * BEHAVIOUR:
  *   1. Verifies session exists and belongs to a sent/closed week.
  *   2. Resolves all sibling sessions for the day (multi-location).
- *   3. If cancelledPlayers provided: transitions availability to 'cancelled',
+ *   3. If newSessions provided: creates a sessions row per entry and
+ *      resolves placeholder sessionIds in assignments/cancelledPlayers to
+ *      the newly-created session ids.
+ *   4. If cancelledPlayers provided: transitions availability to 'cancelled',
  *      sends sendCourtCancellationNotice to affected players.
- *   4. If assignments payload provided: validates and upserts to
+ *   5. If assignments payload provided: validates and upserts to
  *      court_assignments, updates availability.court_letter.
- *   5. Replaces court_rotations and upserts/cleans court_notes for
+ *   6. Replaces court_rotations and upserts/cleans court_notes for
  *      (week_id, session_date) — non-fatal if either step errors.
- *   6. Checks whether all courts have court_number set.
+ *   7. Checks whether all courts have court_number set.
  *      If yes: sends player-facing emails with court number included.
  *      If no:  sends session-details-only email and returns a warning.
  *              Players will receive "check the posted sheet" message
  *              at 8pm backstop if not updated before then.
- *   7. Sets sessions.court_assignment_approved_at = now() and
- *      sessions.court_assignment_sent_at = now() on all sibling sessions.
+ *   8. Sets sessions.court_assignment_approved_at = now() and
+ *      sessions.court_assignment_sent_at = now() on all sibling sessions
+ *      (including any newly-created ones).
  *      Setting court_assignment_sent_at prevents the 8pm backstop from
  *      auto-firing for this day.
  *
@@ -83,7 +101,9 @@
  *   the principle that the system never blocks the organiser.
  *
  * RESPONSES:
- *   200 { status: 'ok', courtsSent: number, cancelledCount: number, warning?: string }
+ *   200 { status: 'ok', courtsSent: number, cancelledCount: number,
+ *         rotationsSaved: number, notesSaved: number,
+ *         newSessionsCreated: number, warning?: string }
  *   400 { status: 'error', message: string }
  *   404 Session not found
  *   500 Internal error
@@ -130,13 +150,15 @@ export async function POST(request, context) {
   const cancelledPlayers = body.cancelledPlayers ?? null
   const rotations = body.rotations ?? null       // [{ winnersCourtLetter, secondCourtLetter, rotationType }]
   const courtNotes = body.courtNotes ?? null     // [{ courtLetter, note }]
+  const newSessions = body.newSessions ?? null   // [{ placeholderSessionId, locationId, courtsAvailable }]
   const bodyWeekId = body.weekId ?? null
   const bodySessionDate = body.sessionDate ?? null
 
   console.log(
     `[api/admin/court-assignment/approve] overrideAssignments: ${overrideAssignments?.length ?? 0}, ` +
     `cancelledPlayers: ${cancelledPlayers?.length ?? 0}, ` +
-    `rotations: ${rotations?.length ?? 0}, courtNotes: ${courtNotes?.length ?? 0}`
+    `rotations: ${rotations?.length ?? 0}, courtNotes: ${courtNotes?.length ?? 0}, ` +
+    `newSessions: ${newSessions?.length ?? 0}`
   )
 
   // ---------------------------------------------------------------------------
@@ -149,6 +171,7 @@ export async function POST(request, context) {
       week_id,
       session_date,
       start_time,
+      format,
       notes,
       court_assignment_sent_at,
       locations ( id, name ),
@@ -202,8 +225,105 @@ export async function POST(request, context) {
     )
   }
 
-  const sessionIds = daySessions.map((s) => s.id)
+  let sessionIds = daySessions.map((s) => s.id)
   console.log(`[api/admin/court-assignment/approve] Resolved ${sessionIds.length} session(s) for day.`)
+
+  // ---------------------------------------------------------------------------
+  // 4.5. Create new sessions for any locations added to this day on the fly
+  //    (e.g. organiser moves courts to a location that had no session for
+  //    this day previously). Each entry in newSessions corresponds to a
+  //    placeholder sessionId ("new:<locationId>") used by assignments/
+  //    cancelledPlayers below — build a map from placeholder -> real id.
+  //
+  //    New sessions copy session_date, week_id, start_time, format, and notes
+  //    from the anchor session. status is set to 'closed' immediately, since
+  //    this session is being created as part of the court assignment step
+  //    (it has no independent open/reminder lifecycle of its own — Procedure
+  //    1 never ran for it, but Procedure 2's output — the assignments payload
+  //    — is what populates it).
+  // ---------------------------------------------------------------------------
+  const placeholderToRealSessionId = new Map()
+
+  if (newSessions?.length) {
+    for (const ns of newSessions) {
+      const { data: createdSession, error: createSessionError } = await supabaseAdmin
+        .from('sessions')
+        .insert({
+          week_id: anchorSession.week_id,
+          session_date: anchorSession.session_date,
+          start_time: anchorSession.start_time,
+          format: anchorSession.format ?? null,
+          notes: anchorSession.notes ?? null,
+          location_id: ns.locationId,
+          courts_available: ns.courtsAvailable,
+          status: 'closed',
+        })
+        .select('id, start_time, notes, location_id, locations ( id, name )')
+        .single()
+
+      if (createSessionError || !createdSession) {
+        console.error(
+          `[api/admin/court-assignment/approve] Failed to create new session for location ${ns.locationId}:`,
+          createSessionError?.message
+        )
+        return Response.json(
+          { status: 'error', message: `Failed to create new session for location ${ns.locationId}: ${createSessionError?.message}` },
+          { status: 500 }
+        )
+      }
+
+      console.log(
+        `[api/admin/court-assignment/approve] Created new session ${createdSession.id} ` +
+        `for location ${ns.locationId} (courts_available=${ns.courtsAvailable})`
+      )
+
+      placeholderToRealSessionId.set(ns.placeholderSessionId, createdSession.id)
+      daySessions.push(createdSession)
+      sessionIds.push(createdSession.id)
+    }
+  }
+
+  /**
+   * Resolves a sessionId that may be a placeholder string ("new:<locationId>")
+   * to its real numeric id, created in the step above. Numeric sessionIds
+   * pass through unchanged.
+   */
+  function resolveSessionId(rawSessionId) {
+    if (typeof rawSessionId === 'string' && rawSessionId.startsWith('new:')) {
+      const real = placeholderToRealSessionId.get(rawSessionId)
+      if (real == null) {
+        throw new Error(`Could not resolve placeholder session id: ${rawSessionId}`)
+      }
+      return real
+    }
+    return rawSessionId
+  }
+
+  // Resolve placeholder sessionIds in assignments and cancelledPlayers before
+  // any further processing — everything downstream expects real numeric ids.
+  let resolvedAssignments = overrideAssignments
+  let resolvedCancelledPlayers = cancelledPlayers
+
+  try {
+    if (overrideAssignments?.length) {
+      resolvedAssignments = overrideAssignments.map((a) => ({
+        ...a,
+        sessionId: resolveSessionId(a.sessionId),
+      }))
+    }
+    if (cancelledPlayers?.length) {
+      resolvedCancelledPlayers = cancelledPlayers.map((p) => ({
+        ...p,
+        sessionId: resolveSessionId(p.sessionId),
+      }))
+    }
+  } catch (resolveError) {
+    console.error(`[api/admin/court-assignment/approve] Session id resolution failed:`, resolveError.message)
+    return Response.json(
+      { status: 'error', message: resolveError.message },
+      { status: 500 }
+    )
+  }
 
   // ---------------------------------------------------------------------------
   // 5. Handle cancelled players — NEW.
@@ -213,10 +333,10 @@ export async function POST(request, context) {
   // ---------------------------------------------------------------------------
   let cancelledCount = 0
 
-  if (cancelledPlayers?.length) {
-    console.log(`[api/admin/court-assignment/approve] Processing ${cancelledPlayers.length} cancellation(s).`)
+  if (resolvedCancelledPlayers?.length) {
+    console.log(`[api/admin/court-assignment/approve] Processing ${resolvedCancelledPlayers.length} cancellation(s).`)
 
-    const cancelledAvailabilityIds = cancelledPlayers.map(p => p.availabilityId)
+    const cancelledAvailabilityIds = resolvedCancelledPlayers.map(p => p.availabilityId)
 
     // Transition availability records to cancelled status.
     const { error: cancelError } = await supabaseAdmin
@@ -238,8 +358,8 @@ export async function POST(request, context) {
 
     // Fetch player and session details needed for the cancellation email.
     // We need: playerFirstName, playerEmail, sessionDate, startTime, locationName.
-    const cancelledPlayerIds = cancelledPlayers.map(p => p.playerId)
-    const cancelledSessionIds = [...new Set(cancelledPlayers.map(p => p.sessionId))]
+    const cancelledPlayerIds = resolvedCancelledPlayers.map(p => p.playerId)
+    const cancelledSessionIds = [...new Set(resolvedCancelledPlayers.map(p => p.sessionId))]
 
     const { data: cancelledPlayerRecords } = await supabaseAdmin
       .from('players')
@@ -259,7 +379,7 @@ export async function POST(request, context) {
 
     // Build the cancellation email payload — one entry per cancelled player.
     const cancellationEmailPayloads = []
-    for (const cp of cancelledPlayers) {
+    for (const cp of resolvedCancelledPlayers) {
       const playerRecord = cancelledPlayerRecords?.find(p => p.id === cp.playerId)
       const sessionRecord = cancelledSessionLookup[cp.sessionId]
       if (!playerRecord || !sessionRecord) continue
@@ -284,10 +404,10 @@ export async function POST(request, context) {
   // 6. Apply override assignments if provided.
   //    Upsert court_assignments and update availability.court_letter.
   // ---------------------------------------------------------------------------
-  if (overrideAssignments?.length) {
-    console.log(`[api/admin/court-assignment/approve] Applying ${overrideAssignments.length} override assignment(s).`)
+  if (resolvedAssignments?.length) {
+    console.log(`[api/admin/court-assignment/approve] Applying ${resolvedAssignments.length} override assignment(s).`)
 
-    const caRows = overrideAssignments.map((a) => ({
+    const caRows = resolvedAssignments.map((a) => ({
       session_id: a.sessionId,
       player_id: a.playerId,
       location_id: a.locationId,
@@ -312,7 +432,7 @@ export async function POST(request, context) {
     // Update availability.court_letter grouped by court letter.
     // Group availability IDs by court letter to minimise DB round-trips.
     const byLetter = new Map()
-    for (const a of overrideAssignments) {
+    for (const a of resolvedAssignments) {
       if (!byLetter.has(a.courtLetter)) byLetter.set(a.courtLetter, [])
       byLetter.get(a.courtLetter).push(a.availabilityId)
     }
@@ -650,6 +770,7 @@ export async function POST(request, context) {
     cancelledCount,
     rotationsSaved: rotations?.length ?? 0,
     notesSaved: courtNotes?.length ?? 0,
+    newSessionsCreated: placeholderToRealSessionId.size,
   }
 
   if (hasMissingNumbers) {

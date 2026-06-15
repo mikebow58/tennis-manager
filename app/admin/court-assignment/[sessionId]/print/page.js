@@ -1,5 +1,4 @@
 import { createClient } from '@/lib/supabase-server'
-import { cookies } from 'next/headers';
 import PrintSheetClient from './PrintSheetClient';
 
 export const dynamic = 'force-dynamic';

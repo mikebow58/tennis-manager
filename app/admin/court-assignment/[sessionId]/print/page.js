@@ -1,4 +1,4 @@
-import { createServerComponentClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@/lib/supabase-server'
 import { cookies } from 'next/headers';
 import PrintSheetClient from './PrintSheetClient';
 

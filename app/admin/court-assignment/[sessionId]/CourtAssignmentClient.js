@@ -798,6 +798,10 @@ export default function CourtAssignmentClient({
   // Success screen — shown after a successful Approve.
   // ---------------------------------------------------------------------------
   if (submitResult?.ok) {
+    // Safely grab the ID segment from the URL (e.g., /admin/court-assignment/55)
+    const urlSegments = typeof window !== 'undefined' ? window.location.pathname.split('/').filter(Boolean) : [];
+    const resolvedSessionId = urlSegments[urlSegments.length - 1] || '';
+
     return (
       <div style={styles.page}>
         <div style={styles.header}>
@@ -805,7 +809,6 @@ export default function CourtAssignmentClient({
           <p style={styles.subtitle}>{sessionDateLabel}</p>
         </div>
         
-        {/* Added marginBottom: '16px' here to space out the print button neatly */}
         <div style={{ ...styles.card, background: '#f0fdf4', border: '1px solid #86efac', marginBottom: '16px' }}>
           <p style={{ color: '#166534', fontWeight: 600, margin: '0 0 8px 0' }}>
             ✓ Approved — {submitResult.courtsSent} player{submitResult.courtsSent !== 1 ? 's' : ''} notified
@@ -820,11 +823,11 @@ export default function CourtAssignmentClient({
         {/* Post-Approval Action Area */}
         <div style={{ display: 'flex', gap: '12px' }}>
           <a
-            href={`/admin/court-assignment/${session?.id || sessionId || initialSession?.id}/print`}
+            href={`/admin/court-assignment/${resolvedSessionId}/print`}
             target="_blank"
             rel="noopener noreferrer"
             style={{
-              background: '#2563eb', // Royal blue print button
+              background: '#2563eb',
               color: '#ffffff',
               padding: '10px 18px',
               borderRadius: '8px',
@@ -838,7 +841,6 @@ export default function CourtAssignmentClient({
               boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
             }}
           >
-            {/* Inline Printer Icon SVG */}
             <svg style={{ marginRight: '8px', width: '18px', height: '18px' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
             </svg>

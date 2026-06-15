@@ -2,6 +2,14 @@
 
 import { useEffect } from 'react';
 
+// Helper function to turn "2026-06-16" into "Tuesday, June 16" without timezone shifting
+const formatDateString = (dateStr) => {
+  if (!dateStr) return 'Upcoming Session';
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+};
+
 export default function PrintSheetClient({ daySessions, locationMap, assignments, rotations, notes }) {
   
   // Automatically pop the system print prompt once the layout has fully mounted
@@ -36,6 +44,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
     if (!groupedData[session.id]) {
       groupedData[session.id] = {
         locationName: locName,
+        sessionDate: session.session_date,
         courts: {}
       };
     }
@@ -86,14 +95,14 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
   return (
     <div className="min-h-screen bg-gray-100 print:bg-white p-6 print:p-0 font-sans">
       {/* CRITICAL PRINT LAYOUT CORRECTIONS:
-        1. @page margin rules handle paper edges cleanly without blowing out widths.
-        2. Body override guarantees elements fill exactly 100% of the printable window area.
-        3. Global layout element selectors completely eliminate master app headers/navbars.
+        1. Setting @page margin to 0 explicitly forces browsers to strip default URLs/headers.
+        2. Transferring the 0.6-inch printable buffer spacing onto the .print-page-wrapper.
+        3. Global layout resets guarantee parent shell menus vanish cleanly.
       */}
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
           @page { 
-            margin: 0.5in; 
+            margin: 0; 
           }
           body { 
             margin: 0 !important; 
@@ -101,13 +110,17 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
             background: white; 
             width: 100% !important;
           }
+          .print-page-wrapper {
+            padding: 0.6in !important;
+            box-sizing: border-box;
+          }
           nav, header, footer, aside, [role="navigation"], .main-sidebar, .main-navbar { 
             display: none !important; 
           }
         }
       `}} />
 
-      {/* Top Banner Control */}
+      {/* Top Banner Control Panel (Only visible on-screen) */}
       <div className="max-w-4xl mx-auto mb-6 p-4 bg-white shadow-sm border rounded-xl flex items-center justify-between print:hidden">
         <div>
           <h1 className="text-base font-bold text-gray-900">Lineup Print Preview</h1>
@@ -127,10 +140,15 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
           const sortedCourts = Object.keys(sessionGroup.courts).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
 
           return (
-            <div key={sessionId} className={sIdx > 0 ? 'print:break-before-page mt-12 print:mt-0' : ''}>
-              {/* Facility identifier */}
-              <div className="hidden print:block text-[9pt] font-mono font-bold text-gray-400 text-right uppercase tracking-widest mb-4">
-                Facility: {sessionGroup.locationName}
+            <div 
+              key={sessionId} 
+              className={`print-page-wrapper ${sIdx > 0 ? 'print:break-before-page mt-12 print:mt-0' : ''}`}
+            >
+              {/* New Custom Headliner Title Block — Displays beautifully on paper */}
+              <div className="mb-6 pb-3 border-b-4 border-gray-900">
+                <h1 className="text-2xl print:text-[24pt] font-black text-gray-900 tracking-tight">
+                  Lineup for {formatDateString(sessionGroup.sessionDate)} – {sessionGroup.locationName}
+                </h1>
               </div>
 
               {/* High-visibility grid layout */}

@@ -58,7 +58,7 @@ export default async function PrintLineupPage(props) {
     // 5. Fetch sibling sessions for cross-location handling
     const { data: daySessions } = await supabase
       .from('sessions')
-      .select('id, location_id, format')
+      .select('id, location_id, format, session_date')
       .eq('week_id', week_id)
       .eq('session_date', session_date);
 

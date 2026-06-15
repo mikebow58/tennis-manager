@@ -4,9 +4,14 @@ import PrintSheetClient from './PrintSheetClient';
 
 export const dynamic = 'force-dynamic';
 
-export default async function PrintLineupPage({ params }) {
+// 1. Accept props instead of direct destructuring to allow async parameter resolution
+export default async function PrintLineupPage(props) {
+  // 2. Await the params promise safely
+  const params = await props.params;
   const { sessionId } = params;
-  const supabase = createServerComponentClient({ cookies });
+  
+  // 3. FIX: Use your actual imported createClient() helper here
+  const supabase = createClient();
 
   // 1. Fetch anchor session to verify status and retrieve day-level anchors
   const { data: anchorSession, error: anchorError } = await supabase

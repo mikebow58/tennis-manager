@@ -13,8 +13,8 @@ export default async function PrintLineupPage(props) {
       return <div style={{ padding: '20px', color: '#dc2626', fontFamily: 'sans-serif' }}>Error: No sessionId found in route parameters.</div>;
     }
 
-    // 2. Initialize database client
-    const supabase = createClient();
+    // 2. FIX: Added 'await' here because createClient is an async factory function
+    const supabase = await createClient();
     if (!supabase) {
       return <div style={{ padding: '20px', color: '#dc2626', fontFamily: 'sans-serif' }}>Error: Supabase client failed to initialize via createClient().</div>;
     }

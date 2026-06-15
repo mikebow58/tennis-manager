@@ -58,7 +58,6 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
       }
     });
 
-    
     // Weave context rules onto matching courts
     Object.keys(groupedData[session.id].courts).forEach(cNum => {
       const court = groupedData[session.id].courts[cNum];
@@ -71,11 +70,11 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
         
         court.rotationText = `Winners to Crt ${winNum}, Losers to Crt ${secNum} (${actionType})`;
       } else {
-  // FALLBACK: If no explicit master matrix rotation row exists for this court,
-  // use the session configuration format string to guide the players.
-  const isSwitchPartners = session.format === 'switch_partners';
-  court.rotationText = isSwitchPartners ? 'Rotate on own court' : 'Keep partner';
-}
+        // FALLBACK: If no explicit master matrix rotation row exists for this court,
+        // use the session configuration format string to guide the players.
+        const isSwitchPartners = session.format === 'switch_partners';
+        court.rotationText = isSwitchPartners ? 'Rotate on own court' : 'Keep partner';
+      }
 
       const noteRow = notes.find(n => n.court_letter === court.courtLetter);
       if (noteRow) {
@@ -86,17 +85,29 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
 
   return (
     <div className="min-h-screen bg-gray-100 print:bg-white p-6 print:p-0 font-sans">
-      {/* CRITICAL PRINT CLEANUP: Injecting a target style block to clear default browser 
-        headers/footers (like the long URL string and timestamp) from appearing on the printouts.
+      {/* CRITICAL PRINT LAYOUT CORRECTIONS:
+        1. @page margin rules handle paper edges cleanly without blowing out widths.
+        2. Body override guarantees elements fill exactly 100% of the printable window area.
+        3. Global layout element selectors completely eliminate master app headers/navbars.
       */}
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
-          @page { margin: 0; }
-          body { margin: 1.6cm; background: white; }
+          @page { 
+            margin: 0.5in; 
+          }
+          body { 
+            margin: 0 !important; 
+            padding: 0 !important;
+            background: white; 
+            width: 100% !important;
+          }
+          nav, header, footer, aside, [role="navigation"], .main-sidebar, .main-navbar { 
+            display: none !important; 
+          }
         }
       `}} />
 
-      {/* Top Banner Control - Cleaned up text and updated action label */}
+      {/* Top Banner Control */}
       <div className="max-w-4xl mx-auto mb-6 p-4 bg-white shadow-sm border rounded-xl flex items-center justify-between print:hidden">
         <div>
           <h1 className="text-base font-bold text-gray-900">Lineup Print Preview</h1>
@@ -110,7 +121,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
       </div>
 
       {/* Main Container */}
-      <div className="max-w-4xl mx-auto bg-white print:w-full">
+      <div className="max-w-4xl mx-auto bg-white print:w-full print:max-w-full">
         {Object.keys(groupedData).map((sessionId, sIdx) => {
           const sessionGroup = groupedData[sessionId];
           const sortedCourts = Object.keys(sessionGroup.courts).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
@@ -123,7 +134,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
               </div>
 
               {/* High-visibility grid layout */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print:gap-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print:grid-cols-2 print:gap-6 print:w-full">
                 {sortedCourts.map(cNum => {
                   const court = sessionGroup.courts[cNum];
                   if (cNum === 'Unassigned') return null;
@@ -152,16 +163,16 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
                         </ul>
                       </div>
 
-                      {/* Rules & Notes Footing Block - Now guaranteed to show with our fallbacks */}
+                      {/* Rules & Notes Footing Block */}
                       {(court.rotationText || court.noteText) && (
                         <div className="mt-6 pt-4 border-t-2 border-dotted border-gray-300 text-gray-700 text-xs print:text-[13pt] space-y-1.5 font-medium">
                           {court.rotationText && (
-                            <p className="leading-tight">
-                              <span className="font-extrabold text-gray-900">Move:</span> {court.rotationText}
+                            <p className="leading-tight font-extrabold text-gray-900 text-[13pt]">
+                              {court.rotationText}
                             </p>
                           )}
                           {court.noteText && (
-                            <p className="bg-amber-50/60 print:bg-gray-100/70 p-2 rounded border border-amber-100 print:border-gray-200 italic font-normal leading-snug">
+                            <p className="bg-amber-50/60 print:bg-gray-100/70 p-2 rounded border border-amber-100 print:border-gray-200 italic font-normal leading-snug text-gray-700">
                               "{court.noteText}"
                             </p>
                           )}

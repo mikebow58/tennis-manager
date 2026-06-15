@@ -69,7 +69,12 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
         const actionType = rotationRow.rotation_type === 'keep_partners' ? 'Keep same partners' : 'Split & spin';
         
         court.rotationText = `Winners to Crt ${winNum}, Losers to Crt ${secNum} (${actionType})`;
-      }
+      } else {
+  // FALLBACK: If no explicit master matrix rotation row exists for this court,
+  // use the session configuration format string to guide the players.
+  const isSwitchPartners = session.format === 'switch_partners';
+  court.rotationText = isSwitchPartners ? 'Rotate on own court' : 'Keep partner';
+}
 
       const noteRow = notes.find(n => n.court_letter === court.courtLetter);
       if (noteRow) {
@@ -80,17 +85,26 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
 
   return (
     <div className="min-h-screen bg-gray-100 print:bg-white p-6 print:p-0 font-sans">
-      {/* Top Banner Control - Completely vanished on physical paper via print:hidden */}
+      {/* CRITICAL PRINT CLEANUP: Injecting a target style block to clear default browser 
+        headers/footers (like the long URL string and timestamp) from appearing on the printouts.
+      */}
+      <style dangerouslySetInnerHTML={{__html: `
+        @media print {
+          @page { margin: 0; }
+          body { margin: 1.6cm; background: white; }
+        }
+      `}} />
+
+      {/* Top Banner Control - Cleaned up text and updated action label */}
       <div className="max-w-4xl mx-auto mb-6 p-4 bg-white shadow-sm border rounded-xl flex items-center justify-between print:hidden">
         <div>
           <h1 className="text-base font-bold text-gray-900">Lineup Print Preview</h1>
-          <p className="text-xs text-gray-500">Formats names to exactly 18pt for high visibility on clipboards/fences.</p>
         </div>
         <button
           onClick={() => window.print()}
           className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors"
         >
-          Trigger Print Dialog
+          Print
         </button>
       </div>
 
@@ -102,7 +116,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
 
           return (
             <div key={sessionId} className={sIdx > 0 ? 'print:break-before-page mt-12 print:mt-0' : ''}>
-              {/* Unobtrusive multi-location identifier to avoid mixups without clustering the header */}
+              {/* Facility identifier */}
               <div className="hidden print:block text-[9pt] font-mono font-bold text-gray-400 text-right uppercase tracking-widest mb-4">
                 Facility: {sessionGroup.locationName}
               </div>
@@ -127,7 +141,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
                           </h2>
                         </div>
 
-                        {/* Player Roster - Explicit 18pt font constraint */}
+                        {/* Player Roster - Explicit 18pt font constraint for high-visibility */}
                         <ul className="space-y-2.5 font-bold text-gray-900">
                           {court.players.map((name, pIdx) => (
                             <li key={pIdx} className="text-[18pt] leading-none tracking-wide truncate">
@@ -137,7 +151,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
                         </ul>
                       </div>
 
-                      {/* Rules & Notes Footing Block */}
+                      {/* Rules & Notes Footing Block - Now guaranteed to show with our fallbacks */}
                       {(court.rotationText || court.noteText) && (
                         <div className="mt-6 pt-4 border-t-2 border-dotted border-gray-300 text-gray-700 text-xs print:text-[13pt] space-y-1.5 font-medium">
                           {court.rotationText && (

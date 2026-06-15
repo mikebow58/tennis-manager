@@ -38,6 +38,7 @@ export default async function PrintLineupPage(props) {
       );
     }
 
+    
     // 4. Check lock states (Checking multiple possible status points safely)
     const isSent = anchorSession.court_assignment_sent_at || anchorSession.court_assignment_notified_at;
 

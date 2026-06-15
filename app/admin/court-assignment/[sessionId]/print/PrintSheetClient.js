@@ -58,6 +58,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
       }
     });
 
+    
     // Weave context rules onto matching courts
     Object.keys(groupedData[session.id].courts).forEach(cNum => {
       const court = groupedData[session.id].courts[cNum];

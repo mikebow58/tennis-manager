@@ -21,6 +21,7 @@
  *     locationId: number,
  *     courtLetter: string,      // 'A', 'B', 'C'
  *     courtNumber: number|null, // organiser-assigned real-world court number
+ *     teamNumber: number|null,  // 1 or 2 — which partnership this player is on
  *     assignmentStatus: 'confirmed' | 'tentative',
  *   }>,
  *
@@ -81,7 +82,8 @@
  *   4. If cancelledPlayers provided: transitions availability to 'cancelled',
  *      sends sendCourtCancellationNotice to affected players.
  *   5. If assignments payload provided: validates and upserts to
- *      court_assignments, updates availability.court_letter.
+ *      court_assignments (including team_number), updates availability's
+ *      court_letter and team_number.
  *   6. Replaces court_rotations and upserts/cleans court_notes for
  *      (week_id, session_date) — non-fatal if either step errors.
  *   7. Checks whether all courts have court_number set.
@@ -98,7 +100,9 @@
  * SOFT WARNING (not a hard block):
  *   If some courts are missing court_number, the response includes
  *   { warning: '...' }. The organiser can proceed — consistent with
- *   the principle that the system never blocks the organiser.
+ *   the principle that the system never blocks the organiser. Missing
+ *   team_number pairings are a separate soft warning surfaced client-side
+ *   on the review screen — this route does not block or warn on them.
  *
  * RESPONSES:
  *   200 { status: 'ok', courtsSent: number, cancelledCount: number,
@@ -402,7 +406,8 @@ export async function POST(request, context) {
 
   // ---------------------------------------------------------------------------
   // 6. Apply override assignments if provided.
-  //    Upsert court_assignments and update availability.court_letter.
+  //    Upsert court_assignments (including team_number) and update
+  //    availability.court_letter and availability.team_number.
   // ---------------------------------------------------------------------------
   if (resolvedAssignments?.length) {
     console.log(`[api/admin/court-assignment/approve] Applying ${resolvedAssignments.length} override assignment(s).`)
@@ -448,6 +453,7 @@ export async function POST(request, context) {
       location_id: a.locationId,
       court_letter: a.courtLetter,   // court_letter added in migration 20260531000000
       court_number: a.courtNumber ?? null,
+      team_number: a.teamNumber ?? null,  // team_number added in migration 20260616000000
       assignment_status: a.assignmentStatus,
       updated_at: new Date().toISOString(),
     }))
@@ -467,25 +473,34 @@ export async function POST(request, context) {
       )
     }
 
-    // Update availability.court_letter grouped by court letter.
-    // Group availability IDs by court letter to minimise DB round-trips.
-    const byLetter = new Map()
+    // Update availability.court_letter and availability.team_number.
+    //
+    // Group availability IDs by (court letter, team number) together —
+    // two players on the SAME court can have DIFFERENT team_number values,
+    // so grouping by court letter alone is not a safe key here. Grouping by
+    // the combination minimises DB round-trips while keeping each group's
+    // values uniform.
+    const grouped = new Map()
     for (const a of resolvedAssignments) {
-      if (!byLetter.has(a.courtLetter)) byLetter.set(a.courtLetter, [])
-      byLetter.get(a.courtLetter).push(a.availabilityId)
+      const key = `${a.courtLetter}::${a.teamNumber ?? 'null'}`
+      if (!grouped.has(key)) {
+        grouped.set(key, { ids: [], courtLetter: a.courtLetter, teamNumber: a.teamNumber ?? null })
+      }
+      grouped.get(key).ids.push(a.availabilityId)
     }
 
-    for (const [courtLetter, ids] of byLetter) {
+    for (const [, { ids, courtLetter, teamNumber }] of grouped) {
       const { error: availError } = await supabaseAdmin
         .from('availability')
-        .update({ court_letter: courtLetter })
+        .update({ court_letter: courtLetter, team_number: teamNumber })
         .in('id', ids)
 
       if (availError) {
-        // Non-fatal — court_assignments is the source of truth for letters.
+        // Non-fatal — court_assignments is the source of truth for letters
+        // and teams.
         console.error(
-          `[api/admin/court-assignment/approve] availability court_letter update failed for ` +
-          `court ${courtLetter}:`, availError.message
+          `[api/admin/court-assignment/approve] availability update failed for ` +
+          `court ${courtLetter} (team ${teamNumber}):`, availError.message
         )
       }
     }
@@ -613,6 +628,7 @@ export async function POST(request, context) {
     .select(`
       court_number,
       court_letter,
+      team_number,
       assignment_status,
       location_id,
       session_id,
@@ -701,6 +717,8 @@ export async function POST(request, context) {
   // ---------------------------------------------------------------------------
   // 8. Soft warning check: any confirmed court missing a court_number?
   //    The system never blocks the organiser — we warn but proceed.
+  //    (Missing team_number pairings are a separate, client-side-only soft
+  //    warning surfaced on the review screen — not checked here.)
   // ---------------------------------------------------------------------------
   const hasMissingNumbers = assignments.some((a) => a.court_number == null)
 

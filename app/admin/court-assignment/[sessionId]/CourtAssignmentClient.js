@@ -14,13 +14,15 @@
  * STEP 1 — EDIT — is the staging area for:
  *   1. Assigning real-world court numbers to court letters (A → 3, B → 1, etc.)
  *   2. Moving players between courts (via dropdown reassignment)
- *   3. Cancelling incomplete courts (moves players to an unassigned pool)
- *   4. Configuring racquet-rotation pairings between courts at the same location
- *   5. Adding optional freeform per-court notes (e.g. non-standard instructions)
- *   6. "Review changes" — advances to step 2 (confirm). Nothing is sent yet.
+ *   3. Swapping which of the two teams a player is paired into on their court
+ *   4. Cancelling incomplete courts (moves players to an unassigned pool)
+ *   5. Configuring racquet-rotation pairings between courts at the same location
+ *   6. Adding optional freeform per-court notes (e.g. non-standard instructions)
+ *   7. "Review changes" — advances to step 2 (confirm). Nothing is sent yet.
  *
  * STEP 2 — CONFIRM — shows:
  *   - Per-location summary: court count, player count, court-by-court roster
+ *     shown as paired teams ("Alice / Bob  vs  Carol / Dave")
  *   - Capacity check per location (HARD STOP if over capacity — see below)
  *   - Rotation pairings in plain language
  *   - Court notes
@@ -28,12 +30,38 @@
  *   - Email summary — counts of assignment vs. cancellation emails
  *   - "Confirm and notify players" — commits all changes in one transaction
  *
+ * PARTNERSHIPS (team_number):
+ *   Procedure 2 pairs each complete court's 4 players into two teams of 2
+ *   using a balanced high/low skill pairing. This is a "first set" starting
+ *   point only — it has no bearing on rotation_type (keep_partners /
+ *   rotate_partners) logic, which governs what happens after the first set
+ *   regardless of how teams were originally formed.
+ *
+ *   On this screen, teams are shown as two visually paired rows per court
+ *   (e.g. "Alice / Bob" and "Carol / Dave"), each with a small swap button
+ *   that flips that player to the other team on the same court.
+ *
+ *   When a player is moved to a different court (via the "Move to…"
+ *   dropdown or from the unassigned pool), they arrive unpaired — their old
+ *   partner stays behind, so the old pairing is no longer valid. The
+ *   organiser can re-pair them using the swap buttons. Players left behind
+ *   on the original court keep their existing team_number untouched.
+ *
+ *   When an entire court is moved to a different location (the "Move to"
+ *   control in the court card header), all 4 players move together and
+ *   their team pairings are preserved — the pairing is still valid since
+ *   nobody was separated from their partner.
+ *
+ *   A complete (4-player) court with one or more unpaired players shows a
+ *   soft, non-blocking warning — consistent with the existing missing-
+ *   court-number warning, this never blocks Approve.
+ *
  * HARD STOP — CAPACITY:
  *   If a court-to-location move results in a location having more courts
  *   assigned than it has courts_available, confirmation is blocked entirely.
  *   This is the one hard stop in the flow — it represents a physical
  *   impossibility (no such court exists), unlike the missing-court-number
- *   soft warning which the system proceeds past.
+ *   and unpaired-player soft warnings which the system proceeds past.
  *
  * VALIDATION (gates "Review changes", step 1 → step 2):
  *   - Every active court card must have exactly 4 players.
@@ -82,6 +110,24 @@ function getSkillLabel(skillAdmin, skillSelf) {
   return '—'
 }
 
+/**
+ * Groups a court's players into team 1, team 2, and unpaired buckets.
+ * Used by both the edit-view court card and (indirectly, via similar logic)
+ * the confirmation view summary line.
+ *
+ * @param {object[]} players — each with a teamNumber field (1, 2, or null)
+ * @returns {{ 1: object[], 2: object[], unassigned: object[] }}
+ */
+function groupPlayersByTeam(players) {
+  const groups = { 1: [], 2: [], unassigned: [] }
+  for (const p of players) {
+    if (p.teamNumber === 1) groups[1].push(p)
+    else if (p.teamNumber === 2) groups[2].push(p)
+    else groups.unassigned.push(p)
+  }
+  return groups
+}
+
 // ---------------------------------------------------------------------------
 // buildInitialState
 //
@@ -100,6 +146,7 @@ function getSkillLabel(skillAdmin, skillSelf) {
 //       courtsAvailable: number,   // max court number allowed at this location
 //       players: [{
 //         playerId, availabilityId, sessionId, locationId,
+//         teamNumber: 1|2|null,
 //         firstName, lastName, skillAdmin, skillSelf
 //       }]
 //     }
@@ -158,6 +205,7 @@ function buildInitialState(daySessions, courtAssignments, availabilityRecords) {
       availabilityId: av?.id ?? null,
       sessionId: ca.session_id,
       locationId: ca.location_id,
+      teamNumber: ca.team_number ?? null,
       firstName: ca.players?.first_name ?? '?',
       lastName: ca.players?.last_name ?? '?',
       skillAdmin: ca.players?.skill_admin ?? null,
@@ -265,7 +313,17 @@ export default function CourtAssignmentClient({
     return dupes // set of "locationId:number" strings
   }, [state.courts])
 
+  // Soft warning (non-blocking): complete (4-player) courts that have one
+  // or more players without a team assigned. Mirrors the missing-court-
+  // number warning — informational only, never blocks Approve.
+  const unpairedCourts = useMemo(() => {
+    return Object.entries(state.courts)
+      .filter(([, court]) => court.players.length === 4 && court.players.some(p => p.teamNumber == null))
+      .map(([key, court]) => ({ key, letter: court.courtLetter }))
+  }, [state.courts])
+
   // Approve is enabled only when all courts have exactly 4 players AND no duplicate numbers.
+  // Unpaired players are a soft warning and do NOT affect this gate.
   const canApprove = invalidCourts.length === 0 && duplicateCourtNumbers.size === 0
 
   // Build a per-location summary for the confirmation view: court count vs.
@@ -305,8 +363,9 @@ export default function CourtAssignmentClient({
   }, [courtsByLocation])
 
   // Hard stop: any location with more assigned courts than it has available.
-  // Unlike the missing-court-number soft warning, this represents a physical
-  // impossibility (no such court exists) and blocks confirmation entirely.
+  // Unlike the missing-court-number and unpaired-player soft warnings, this
+  // represents a physical impossibility (no such court exists) and blocks
+  // confirmation entirely.
   const overCapacityLocations = useMemo(
     () => locationSummaries.filter(s => s.overCapacity),
     [locationSummaries]
@@ -325,6 +384,15 @@ export default function CourtAssignmentClient({
     }
     return messages
   }, [invalidCourts, duplicateCourtNumbers])
+
+  // Soft-warning message list (informational only — does not gate Approve).
+  const softWarningMessage = useMemo(() => {
+    const messages = []
+    for (const { letter } of unpairedCourts) {
+      messages.push(`Court ${letter} has a player without a partner assigned`)
+    }
+    return messages
+  }, [unpairedCourts])
 
   // Email summary counts for the confirmation view — plain-language version
   // of what the Approve POST will actually do.
@@ -408,6 +476,10 @@ export default function CourtAssignmentClient({
    * Moves a player from their current court to a target court.
    * Updates both the source court (removes player) and target court (adds player).
    *
+   * The moved player's team_number is cleared — their partner is staying
+   * behind on the original court, so the old pairing is no longer valid.
+   * The player(s) left behind keep their existing team_number untouched.
+   *
    * @param {string} fromCourtKey - Letter of the court the player is leaving
    * @param {number} playerId
    * @param {string} toCourtKey - Letter of the court the player is joining
@@ -424,9 +496,11 @@ export default function CourtAssignmentClient({
       const player = fromCourt.players.find(p => p.playerId === playerId)
       if (!player) return prev
 
-      // The player inherits the target court's session and location.
+      // The player inherits the target court's session and location, and
+      // loses their team pairing — their old partner stays behind.
       const movedPlayer = {
         ...player,
+        teamNumber: null,
         sessionId: toCourt.sessionId,
         locationId: toCourt.locationId,
       }
@@ -452,6 +526,8 @@ export default function CourtAssignmentClient({
 
   /**
    * Moves a player from the unassigned pool to a target court.
+   * Arrives unpaired (teamNumber null) — this is a fresh placement, not a
+   * continuation of any prior pairing.
    */
   const handleMoveFromUnassigned = useCallback((playerId, toCourtKey) => {
     setState(prev => {
@@ -463,6 +539,7 @@ export default function CourtAssignmentClient({
 
       const movedPlayer = {
         ...player,
+        teamNumber: null,
         sessionId: toCourt.sessionId,
         locationId: toCourt.locationId,
       }
@@ -484,9 +561,42 @@ export default function CourtAssignmentClient({
   }, [])
 
   /**
+   * Flips a player's team assignment between team 1 and team 2 on their
+   * current court. A player with no team yet (teamNumber null — e.g. just
+   * moved here) defaults to team 1 on first tap.
+   *
+   * @param {string} courtKey - Letter of the court the player is on
+   * @param {number} playerId
+   */
+  const handleSwapTeam = useCallback((courtKey, playerId) => {
+    setState(prev => {
+      const court = prev.courts[courtKey]
+      if (!court) return prev
+
+      const newPlayers = court.players.map(p => {
+        if (p.playerId !== playerId) return p
+        const newTeam = p.teamNumber === 1 ? 2 : 1
+        return { ...p, teamNumber: newTeam }
+      })
+
+      console.log(`[CourtAssignment] Swapped team for player ${playerId} on Court ${courtKey}`)
+
+      return {
+        ...prev,
+        courts: {
+          ...prev.courts,
+          [courtKey]: { ...court, players: newPlayers },
+        },
+      }
+    })
+  }, [])
+
+  /**
    * Moves an entire court (and all its players) to a different location.
    * Updates locationId, locationName, sessionId, and courtsAvailable on the
-   * court object, and locationId/sessionId on each of its players.
+   * court object, and locationId/sessionId on each of its players. Team
+   * pairings are preserved — all 4 players move together, so nobody is
+   * separated from their partner.
    *
    * The court's previously-selected court number is reset to unassigned —
    * court numbers are constrained per-location (a number valid at the old
@@ -510,6 +620,8 @@ export default function CourtAssignmentClient({
         `from ${court.locationName} to ${destination.locationName}`
       )
 
+      // Team pairings (teamNumber) are NOT touched here — all players move
+      // together as a group, so no one is separated from their partner.
       const movedPlayers = court.players.map(p => ({
         ...p,
         sessionId: destination.sessionId,
@@ -669,7 +781,7 @@ export default function CourtAssignmentClient({
 
     // Build the assignments array from current court state.
     // Each confirmed player needs: availabilityId, playerId, sessionId,
-    // locationId, courtLetter, courtNumber, assignmentStatus.
+    // locationId, courtLetter, courtNumber, teamNumber, assignmentStatus.
     const assignments = []
     for (const [courtKey, court] of Object.entries(state.courts)) {
       for (const player of court.players) {
@@ -680,6 +792,7 @@ export default function CourtAssignmentClient({
           locationId: player.locationId,
           courtLetter: court.courtLetter,
           courtNumber: court.courtNumber ?? null,
+          teamNumber: player.teamNumber ?? null,
           assignmentStatus: 'confirmed',
         })
       }
@@ -916,6 +1029,11 @@ export default function CourtAssignmentClient({
 
             const isTentativeCourt = court.players.length < 4
 
+            // Group this court's players into team 1 / team 2 / unpaired for
+            // the visually-paired rendering below.
+            const teamGroups = groupPlayersByTeam(court.players)
+            const hasUnpaired = teamGroups.unassigned.length > 0
+
             return (
               <div
                 key={courtKey}
@@ -963,7 +1081,8 @@ export default function CourtAssignmentClient({
                       on single-location days, since the organiser may need
                       to add a new location to the day on the fly (e.g. a
                       last-minute loss of courts at the original location).
-                      Resets court number on move. */}
+                      Resets court number on move. Team pairings travel with
+                      the court since all 4 players move together. */}
                   {allLocations.length > 1 && (
                     <div style={styles.courtNumberRow}>
                       <label style={styles.courtNumberLabel} htmlFor={`court-location-${courtKey}`}>
@@ -1022,17 +1141,62 @@ export default function CourtAssignmentClient({
                   {court.players.length} / 4 players
                 </p>
 
-                {/* Player rows */}
-                {court.players.map(player => (
-                  <PlayerRow
-                    key={player.playerId}
-                    player={player}
-                    currentCourtKey={courtKey}
-                    allCourtLetters={allCourtLetters}
-                    courts={state.courts}
-                    onMove={handleMovePlayer}
-                  />
-                ))}
+                {/* Team 1 row */}
+                {teamGroups[1].length > 0 && (
+                  <div style={styles.teamGroup}>
+                    <div style={styles.teamLabel}>Team 1</div>
+                    {teamGroups[1].map((player, idx) => (
+                      <PairedPlayerRow
+                        key={player.playerId}
+                        player={player}
+                        isLastInPair={idx === teamGroups[1].length - 1}
+                        currentCourtKey={courtKey}
+                        allCourtLetters={allCourtLetters}
+                        courts={state.courts}
+                        onMove={handleMovePlayer}
+                        onSwapTeam={handleSwapTeam}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Team 2 row */}
+                {teamGroups[2].length > 0 && (
+                  <div style={styles.teamGroup}>
+                    <div style={styles.teamLabel}>Team 2</div>
+                    {teamGroups[2].map((player, idx) => (
+                      <PairedPlayerRow
+                        key={player.playerId}
+                        player={player}
+                        isLastInPair={idx === teamGroups[2].length - 1}
+                        currentCourtKey={courtKey}
+                        allCourtLetters={allCourtLetters}
+                        courts={state.courts}
+                        onMove={handleMovePlayer}
+                        onSwapTeam={handleSwapTeam}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Unpaired players — shown separately, with a soft warning below */}
+                {hasUnpaired && (
+                  <div style={styles.teamGroup}>
+                    <div style={{ ...styles.teamLabel, color: '#b45309' }}>Unpaired</div>
+                    {teamGroups.unassigned.map(player => (
+                      <PairedPlayerRow
+                        key={player.playerId}
+                        player={player}
+                        isLastInPair={true}
+                        currentCourtKey={courtKey}
+                        allCourtLetters={allCourtLetters}
+                        courts={state.courts}
+                        onMove={handleMovePlayer}
+                        onSwapTeam={handleSwapTeam}
+                      />
+                    ))}
+                  </div>
+                )}
 
                 {/* Optional per-court note — freeform, shown to players in
                     the assignment email and on the printed lineup sheet. */}
@@ -1089,12 +1253,23 @@ export default function CourtAssignmentClient({
         </div>
       )}
 
-      {/* Validation messages */}
+      {/* Validation messages (hard — block Review changes) */}
       {validationMessage.length > 0 && (
         <div style={styles.validationBlock}>
           {validationMessage.map((msg, i) => (
             <p key={i} style={{ margin: '0 0 4px 0', color: '#b45309', fontSize: '14px' }}>
               ⚠ {msg}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {/* Soft warning messages (informational — do not block Review changes) */}
+      {softWarningMessage.length > 0 && (
+        <div style={styles.softWarningBlock}>
+          {softWarningMessage.map((msg, i) => (
+            <p key={i} style={{ margin: '0 0 4px 0', color: '#92400e', fontSize: '13px' }}>
+              ℹ {msg}
             </p>
           ))}
         </div>
@@ -1126,7 +1301,8 @@ export default function CourtAssignmentClient({
 //
 // Sections, in order:
 //   1. Header with "Back to edit" link
-//   2. Per-location summary (courts, players, capacity check)
+//   2. Per-location summary (courts, players, capacity check) — courts shown
+//      as paired teams ("Alice / Bob  vs  Carol / Dave")
 //   3. Rotations (if any configured)
 //   4. Court notes (if any entered)
 //   5. Cancellations (if the unassigned pool is non-empty)
@@ -1211,7 +1387,7 @@ function ConfirmationView({
             {loc.courtCount} court{loc.courtCount !== 1 ? 's' : ''}, {loc.playerCount} players
           </p>
 
-          {/* One line per court showing player names */}
+          {/* One line per court showing paired teams */}
           {Object.entries(courtsByLocation[loc.locationName].courts)
             .sort(([, a], [, b]) => {
               // Sort by court number if both have one; otherwise by letter.
@@ -1222,7 +1398,27 @@ function ConfirmationView({
               const courtLabel = court.courtNumber != null
                 ? `Court ${court.courtNumber}`
                 : `Court ${court.courtLetter} (number not yet assigned)`
-              const playerNames = court.players.map(p => `${p.firstName} ${p.lastName}`).join(', ')
+
+              // Build "Alice / Bob  vs  Carol / Dave" style label. A team is
+              // only shown joined with " / " if it has exactly 2 players —
+              // an incomplete/unpaired team falls back to a comma list under
+              // an "Unpaired:" prefix so nothing is silently dropped.
+              const groups = groupPlayersByTeam(court.players)
+              const team1Names = groups[1].map(p => `${p.firstName} ${p.lastName}`)
+              const team2Names = groups[2].map(p => `${p.firstName} ${p.lastName}`)
+              const unpairedNames = groups.unassigned.map(p => `${p.firstName} ${p.lastName}`)
+
+              const teamParts = []
+              if (team1Names.length === 2) teamParts.push(team1Names.join(' / '))
+              else if (team1Names.length > 0) teamParts.push(`Unpaired: ${team1Names.join(', ')}`)
+
+              if (team2Names.length === 2) teamParts.push(team2Names.join(' / '))
+              else if (team2Names.length > 0) teamParts.push(`Unpaired: ${team2Names.join(', ')}`)
+
+              if (unpairedNames.length > 0) teamParts.push(`Unpaired: ${unpairedNames.join(', ')}`)
+
+              const playerNames = teamParts.join('  vs  ')
+
               return (
                 <p key={courtKey} style={styles.summaryCourtLine}>
                   <strong>{courtLabel}</strong> — {playerNames}
@@ -1362,8 +1558,16 @@ function findCourtByLetter(courtsByLocation, letter) {
   return null
 }
 
-
-function PlayerRow({ player, currentCourtKey, allCourtLetters, courts, onMove }) {
+// ---------------------------------------------------------------------------
+// PairedPlayerRow — one row within a team group (Team 1 / Team 2 / Unpaired)
+// on a court card. Shows the player's name, skill, a "⇄" button to swap them
+// to the other team on this court, and (if applicable) a "Move to…" dropdown
+// to send them to a different court entirely.
+//
+// A small "/" connector is rendered after the first player in a pair (when
+// isLastInPair is false) to visually read as "Alice / Bob".
+// ---------------------------------------------------------------------------
+function PairedPlayerRow({ player, isLastInPair, currentCourtKey, allCourtLetters, courts, onMove, onSwapTeam }) {
   // Restrict moves to courts at the SAME location as the player's current
   // court. Cross-location moves are court-level only (see "Move to" on the
   // court card header) — moving an individual player to a different
@@ -1375,34 +1579,49 @@ function PlayerRow({ player, currentCourtKey, allCourtLetters, courts, onMove })
   )
 
   return (
-    <div style={styles.playerRow}>
-      <div style={styles.playerInfo}>
-        <span style={styles.playerName}>
-          {player.firstName} {player.lastName}
-        </span>
-        <span style={styles.playerSkill}>
-          {getSkillLabel(player.skillAdmin, player.skillSelf)}
-        </span>
+    <div style={styles.pairedRowWrapper}>
+      <div style={styles.playerRow}>
+        <div style={styles.playerInfo}>
+          <span style={styles.playerName}>
+            {player.firstName} {player.lastName}
+          </span>
+          <span style={styles.playerSkill}>
+            {getSkillLabel(player.skillAdmin, player.skillSelf)}
+          </span>
+        </div>
+
+        {/* Swap team button — flips this player to the other team on this court */}
+        <button
+          onClick={() => onSwapTeam(currentCourtKey, player.playerId)}
+          style={styles.swapTeamButton}
+          aria-label={`Move ${player.firstName} ${player.lastName} to the other team on this court`}
+          title='Swap to other team'
+        >
+          ⇄
+        </button>
+
+        {/* Move to court dropdown — only shown if there are other courts to move to */}
+        {otherCourts.length > 0 && (
+          <select
+            value=''
+            onChange={e => {
+              if (e.target.value) onMove(currentCourtKey, player.playerId, e.target.value)
+            }}
+            style={styles.moveSelect}
+            aria-label={`Move ${player.firstName} to another court`}
+          >
+            <option value=''>Move to…</option>
+            {otherCourts.map(courtKey => (
+              <option key={courtKey} value={courtKey}>
+                Court {courtKey} ({courts[courtKey]?.players?.length ?? 0}/4)
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
-      {/* Move to court dropdown — only shown if there are other courts to move to */}
-      {otherCourts.length > 0 && (
-        <select
-          value=''
-          onChange={e => {
-            if (e.target.value) onMove(currentCourtKey, player.playerId, e.target.value)
-          }}
-          style={styles.moveSelect}
-          aria-label={`Move ${player.firstName} to another court`}
-        >
-          <option value=''>Move to…</option>
-          {otherCourts.map(courtKey => (
-            <option key={courtKey} value={courtKey}>
-              Court {courtKey} ({courts[courtKey]?.players?.length ?? 0}/4)
-            </option>
-          ))}
-        </select>
-      )}
+      {/* "/" connector between paired players, e.g. "Alice / Bob" */}
+      {!isLastInPair && <div style={styles.pairConnector}>/</div>}
     </div>
   )
 }
@@ -1687,6 +1906,42 @@ const styles = {
     fontSize: '13px',
     margin: '0 0 8px 0',
   },
+
+  // -------------------------------------------------------------------------
+  // Team grouping (partnerships)
+  // -------------------------------------------------------------------------
+  teamGroup: {
+    marginBottom: '8px',
+  },
+  teamLabel: {
+    fontSize: '11px',
+    fontWeight: '700',
+    color: '#6b7280',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    margin: '0 0 4px 2px',
+  },
+  pairedRowWrapper: {
+    marginBottom: '2px',
+  },
+  pairConnector: {
+    textAlign: 'center',
+    color: '#9ca3af',
+    fontSize: '13px',
+    fontWeight: '600',
+    margin: '-2px 0 2px 0',
+  },
+  swapTeamButton: {
+    background: '#f3f4f6',
+    border: '1px solid #d1d5db',
+    color: '#374151',
+    borderRadius: '6px',
+    padding: '5px 9px',
+    fontSize: '13px',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+
   playerRow: {
     display: 'flex',
     alignItems: 'center',
@@ -1694,7 +1949,7 @@ const styles = {
     padding: '8px 10px',
     background: '#f9fafb',
     borderRadius: '6px',
-    marginBottom: '6px',
+    marginBottom: '0px',
     gap: '8px',
   },
   playerInfo: {
@@ -1752,6 +2007,13 @@ const styles = {
   validationBlock: {
     background: '#fffbeb',
     border: '1px solid #fcd34d',
+    borderRadius: '8px',
+    padding: '12px 16px',
+    marginBottom: '16px',
+  },
+  softWarningBlock: {
+    background: '#fffbeb',
+    border: '1px dashed #fcd34d',
     borderRadius: '8px',
     padding: '12px 16px',
     marginBottom: '16px',

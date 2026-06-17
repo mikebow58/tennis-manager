@@ -68,7 +68,10 @@ export default async function PrintLineupPage(props) {
     const { data: locations } = await supabase.from('locations').select('id, name');
     const locationMap = Object.fromEntries(locations?.map(l => [l.id, l.name]) || []);
 
-    // 7. Fetch assignments alongside the core player data relation map
+    // 7. Fetch assignments alongside the core player data relation map.
+    //    team_number added here — identifies which of the two teams (1 or 2)
+    //    a player is paired into on their court, so PrintSheetClient can
+    //    render partnerships ("Alice / Bob") instead of a flat 4-name list.
     const { data: assignments, error: assignmentsError } = await supabase
       .from('court_assignments')
       .select(`
@@ -77,6 +80,7 @@ export default async function PrintLineupPage(props) {
         player_id,
         court_number,
         court_letter,
+        team_number,
         players ( id, first_name, last_name )
       `)
       .in('session_id', sessionIds);

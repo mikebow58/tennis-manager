@@ -55,15 +55,25 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
         groupedData[session.id].courts[cNum] = {
           courtNumber: cNum,
           courtLetter: asg.court_letter,
-          players: [],
+          // Players are now grouped by team (1, 2) instead of one flat list.
+          // unpaired holds anyone with no team_number set (e.g. an
+          // incomplete court, or a player the organiser left unpaired) —
+          // shown separately on the sheet rather than silently dropped.
+          teams: { 1: [], 2: [], unpaired: [] },
           rotationText: '',
           noteText: ''
         };
       }
       if (asg.players) {
-        groupedData[session.id].courts[cNum].players.push(
-          `${asg.players.first_name} ${asg.players.last_name}`
-        );
+        const fullName = `${asg.players.first_name} ${asg.players.last_name}`;
+        const court = groupedData[session.id].courts[cNum];
+        if (asg.team_number === 1) {
+          court.teams[1].push(fullName);
+        } else if (asg.team_number === 2) {
+          court.teams[2].push(fullName);
+        } else {
+          court.teams.unpaired.push(fullName);
+        }
       }
     });
 
@@ -171,14 +181,45 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
                           </h2>
                         </div>
 
-                        {/* Player Roster - Explicit 18pt font constraint for high-visibility */}
-                        <ul className="space-y-2.5 font-bold text-gray-900">
-                          {court.players.map((name, pIdx) => (
-                            <li key={pIdx} className="text-[18pt] leading-none tracking-wide truncate">
-                              {name}
-                            </li>
+                        {/* Team Roster — each team's two players are shown as a
+                            stacked pair ("Alice" then "Bob"), with a thin divider
+                            between the two teams so they read as "Team A" vs
+                            "Team B" without needing explicit labels on the sheet.
+                            Explicit 18pt font constraint preserved for
+                            high-visibility/clipboard legibility. */}
+                        <div className="space-y-3">
+                          {[1, 2].map(teamNum => (
+                            court.teams[teamNum].length > 0 && (
+                              <ul key={teamNum} className="space-y-1 font-bold text-gray-900">
+                                {court.teams[teamNum].map((name, pIdx) => (
+                                  <li key={pIdx} className="text-[18pt] leading-tight tracking-wide truncate">
+                                    {name}
+                                  </li>
+                                ))}
+                              </ul>
+                            )
                           ))}
-                        </ul>
+
+                          {/* Divider between Team 1 and Team 2, only shown when
+                              both teams are present (a normal complete court). */}
+                          {court.teams[1].length > 0 && court.teams[2].length > 0 && (
+                            <div className="border-t border-dashed border-gray-300 my-1" />
+                          )}
+
+                          {/* Unpaired players (no team assigned) — shown smaller,
+                              below the paired teams, so an incomplete or
+                              not-yet-paired court still prints something useful
+                              rather than silently dropping names. */}
+                          {court.teams.unpaired.length > 0 && (
+                            <ul className="space-y-1 font-semibold text-gray-700">
+                              {court.teams.unpaired.map((name, pIdx) => (
+                                <li key={pIdx} className="text-[14pt] leading-tight tracking-wide truncate">
+                                  {name}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
                       </div>
 
                       {/* Rules & Notes Footing Block */}

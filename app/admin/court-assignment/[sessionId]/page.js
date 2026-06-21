@@ -18,7 +18,7 @@
  *
  * DATA LOADED:
  *   - All sibling sessions for the day (resolved via week_id + session_date)
- *   - court_assignments records for all sibling sessions
+ *   - court_assignments records for all sibling sessions (including team_number)
  *   - availability records (confirmed + tentative) for all sibling sessions
  *   - Player details (name, skill) for display
  *   - courts_available per session (to constrain court number dropdowns)
@@ -152,6 +152,8 @@ export default async function CourtAssignmentPage({ params }) {
   // 5. Fetch court_assignments for all sessions on this day.
   //    These are the Procedure 2 results (court letters, tentative status).
   //    court_number may be null — organiser assigns on this screen.
+  //    team_number (1 or 2) is set by Procedure 2's snake pairing and
+  //    identifies which partnership each player belongs to on their court.
   // ---------------------------------------------------------------------------
   const { data: courtAssignments, error: caError } = await supabaseAdmin
     .from('court_assignments')
@@ -162,6 +164,7 @@ export default async function CourtAssignmentPage({ params }) {
       location_id,
       court_letter,
       court_number,
+      team_number,
       assignment_status,
       players ( id, first_name, last_name, skill_admin, skill_self )
     `)

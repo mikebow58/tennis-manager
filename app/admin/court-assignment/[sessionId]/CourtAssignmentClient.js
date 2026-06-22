@@ -5,38 +5,29 @@
  *
  * Interactive court assignment review and approval UI, in two steps:
  *
- *   STEP 1 — 'edit': the staging editor. All changes are LOCAL STATE only —
- *     nothing writes to the database or sends any email here.
- *   STEP 2 — 'confirm': a plain-language summary of the staged state.
- *     "Back to edit" returns to step 1 with all state intact. "Confirm and
- *     notify players" fires the actual Approve POST.
+ *   STEP 1 — 'edit': the staging editor. All changes are LOCAL STATE only.
+ *   STEP 2 — 'confirm': plain-language summary before the Approve POST fires.
  *
- * TEAM PAIRING (partnerships):
- *   Procedure 2 assigns each complete court's 4 players into two teams of 2
- *   using a balanced high/low skill pairing. This is a "first set" starting
- *   point — it has no bearing on rotation_type logic.
+ * TEAM PAIRING:
+ *   Procedure 2 assigns each complete court's 4 players into two teams using
+ *   snake pairing. A "Change teams" dropdown per court shows all 3 possible
+ *   pairings; selecting one re-assigns all 4 players in one action.
  *
- *   On each court card, players are shown under "Team 1" and "Team 2"
- *   sub-headings. A "Change teams" dropdown below the player list shows all
- *   3 possible ways to split those 4 players into two pairs. Selecting a
- *   different option instantly re-assigns all 4 players' team numbers in
- *   one action — one decision, not four. The current pairing is always
- *   pre-selected in the dropdown.
+ * FORMAT / ROTATION DISPLAY:
+ *   Every court shows a format instruction derived from the session's format
+ *   field (switch_partners → "Switch partners each set"; paired_rotation →
+ *   "Keep partners each set"). Courts in a rotation pairing additionally
+ *   show winners/losers direction. The organiser does not choose partner
+ *   behaviour per pairing — it inherits from the session format. If
+ *   something non-standard applies to a court, use the court notes field.
  *
- *   When a player is moved to a different court, they arrive with no team
- *   number — their old partner stays behind. The "Change teams" dropdown on
- *   the destination court will offer new pairing options once the court has
- *   exactly 4 players again.
- *
- *   When an entire court is moved to a different location, team pairings
- *   travel with it — all 4 players move together, so no one is separated.
+ * COURT NUMBER WARNING:
+ *   Courts without an assigned court number are highlighted in red on the
+ *   confirmation screen. Non-blocking — the organiser can still approve.
  */
 
 import { useState, useMemo, useCallback } from 'react'
 
-// ---------------------------------------------------------------------------
-// Skill label helper
-// ---------------------------------------------------------------------------
 const SKILL_LABELS = {
   1: '3.0-', 2: '3.0', 3: 'Str 3.0', 4: '3.5',
   5: 'Str 3.5', 6: '4.0', 7: 'Str 4.0', 8: '4.5+',
@@ -48,15 +39,32 @@ function getSkillLabel(skillAdmin, skillSelf) {
   return '—'
 }
 
+/**
+ * Returns the player-facing format instruction for a court, combining the
+ * session format with any rotation pairing context.
+ *
+ * @param {string|null} sessionFormat  — 'switch_partners' | 'paired_rotation' | null
+ * @param {object|null} rotationPairing — the rotation row for this court (if any)
+ * @param {Function} getCourtDisplayLabel — resolves a court letter to "Court 3" or "Court B"
+ * @returns {string}
+ */
+function buildFormatInstruction(sessionFormat, rotationPairing, getCourtDisplayLabel) {
+  const partnerText = sessionFormat === 'switch_partners'
+    ? 'Switch partners each set'
+    : 'Keep partners each set'
+
+  if (!rotationPairing) {
+    return partnerText
+  }
+
+  const winnersLabel = getCourtDisplayLabel(rotationPairing.winnersCourtLetter)
+  const secondLabel = getCourtDisplayLabel(rotationPairing.secondCourtLetter)
+  return `Winners to ${winnersLabel}, Losers to ${secondLabel} · ${partnerText}`
+}
+
 // ---------------------------------------------------------------------------
 // Pairing helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Given exactly 4 players, returns all 3 valid ways to split them into two
- * teams of 2. For players [A, B, C, D] the 3 pairings are:
- *   A+B vs C+D,  A+C vs B+D,  A+D vs B+C
- */
 function generatePairingOptions(players) {
   if (players.length !== 4) return []
   const [a, b, c, d] = players
@@ -67,19 +75,16 @@ function generatePairingOptions(players) {
   ]
 }
 
-/** Human-readable label: "Joe & Jack  vs  Mike & Matt" */
 function pairingLabel(option) {
   const t1 = option.team1.map(p => p.firstName).join(' & ')
   const t2 = option.team2.map(p => p.firstName).join(' & ')
   return `${t1}  vs  ${t2}`
 }
 
-/** Stable key built from sorted team-1 player IDs. */
 function pairingKey(option) {
   return option.team1.map(p => p.playerId).sort().join(',')
 }
 
-/** Returns the key matching the court's current team-1 players, or null. */
 function currentPairingKey(players) {
   if (players.length !== 4) return null
   const team1Ids = players.filter(p => p.teamNumber === 1).map(p => p.playerId).sort()
@@ -102,21 +107,16 @@ function groupPlayersByTeam(players) {
 // ---------------------------------------------------------------------------
 function buildInitialState(daySessions, courtAssignments, availabilityRecords) {
   const availByPlayer = {}
-  for (const av of availabilityRecords) {
-    availByPlayer[av.player_id] = av
-  }
+  for (const av of availabilityRecords) availByPlayer[av.player_id] = av
 
   const sessionById = {}
-  for (const s of daySessions) {
-    sessionById[s.id] = s
-  }
+  for (const s of daySessions) sessionById[s.id] = s
 
   const courtMap = {}
 
   for (const ca of courtAssignments) {
     const session = sessionById[ca.session_id]
     if (!session) continue
-
     const key = ca.court_letter
 
     if (!courtMap[key]) {
@@ -128,6 +128,7 @@ function buildInitialState(daySessions, courtAssignments, availabilityRecords) {
         locationName: session.locations?.name ?? 'Unknown location',
         courtsAvailable: session.courts_available ?? 8,
         totalCourts: session.locations?.total_courts ?? null,
+        sessionFormat: session.format ?? null,
         players: [],
       }
     }
@@ -147,9 +148,7 @@ function buildInitialState(daySessions, courtAssignments, availabilityRecords) {
   }
 
   const sortedCourts = {}
-  for (const key of Object.keys(courtMap).sort()) {
-    sortedCourts[key] = courtMap[key]
-  }
+  for (const key of Object.keys(courtMap).sort()) sortedCourts[key] = courtMap[key]
 
   return { courts: sortedCourts, unassigned: [] }
 }
@@ -171,6 +170,9 @@ export default function CourtAssignmentClient({
   const [submitting, setSubmitting] = useState(false)
   const [submitResult, setSubmitResult] = useState(null)
 
+  // ---------------------------------------------------------------------------
+  // Derived values
+  // ---------------------------------------------------------------------------
   const courtsByLocation = useMemo(() => {
     const grouped = {}
     for (const [key, court] of Object.entries(state.courts)) {
@@ -190,11 +192,12 @@ export default function CourtAssignmentClient({
 
   const allCourtLetters = useMemo(() => Object.keys(state.courts), [state.courts])
 
-  const invalidCourts = useMemo(() => {
-    return Object.entries(state.courts)
-      .filter(([, court]) => court.players.length !== 4)
-      .map(([key, court]) => ({ key, letter: court.courtLetter, count: court.players.length }))
-  }, [state.courts])
+  const invalidCourts = useMemo(() =>
+    Object.entries(state.courts)
+      .filter(([, c]) => c.players.length !== 4)
+      .map(([key, c]) => ({ key, letter: c.courtLetter, count: c.players.length })),
+    [state.courts]
+  )
 
   const duplicateCourtNumbers = useMemo(() => {
     const seen = {}
@@ -211,8 +214,8 @@ export default function CourtAssignmentClient({
 
   const canApprove = invalidCourts.length === 0 && duplicateCourtNumbers.size === 0
 
-  const locationSummaries = useMemo(() => {
-    return Object.entries(courtsByLocation).map(([locName, locData]) => {
+  const locationSummaries = useMemo(() =>
+    Object.entries(courtsByLocation).map(([locName, locData]) => {
       const courtCount = Object.keys(locData.courts).length
       const isNewLocation = locData.courtsAvailable == null
       const capacityBound = isNewLocation ? locData.totalCourts : locData.courtsAvailable
@@ -223,8 +226,9 @@ export default function CourtAssignmentClient({
         overCapacity: capacityBound != null && courtCount > capacityBound,
         capacityBound,
       }
-    })
-  }, [courtsByLocation])
+    }),
+    [courtsByLocation]
+  )
 
   const overCapacityLocations = useMemo(() => locationSummaries.filter(s => s.overCapacity), [locationSummaries])
 
@@ -269,7 +273,6 @@ export default function CourtAssignmentClient({
   // ---------------------------------------------------------------------------
   // Handlers
   // ---------------------------------------------------------------------------
-
   const handleCourtNumberChange = useCallback((courtKey, value) => {
     setState(prev => ({
       ...prev,
@@ -280,31 +283,17 @@ export default function CourtAssignmentClient({
     }))
   }, [])
 
-  /**
-   * Applies a chosen pairing option to a court's 4 players in one action.
-   * The selected option's team1 players get teamNumber=1; the rest get 2.
-   */
   const handleChangePairing = useCallback((courtKey, selectedKey) => {
     setState(prev => {
       const court = prev.courts[courtKey]
       if (!court || court.players.length !== 4) return prev
-
       const options = generatePairingOptions(court.players)
       const chosen = options.find(o => pairingKey(o) === selectedKey)
       if (!chosen) return prev
-
       const team1Ids = new Set(chosen.team1.map(p => p.playerId))
-      const newPlayers = court.players.map(p => ({
-        ...p,
-        teamNumber: team1Ids.has(p.playerId) ? 1 : 2,
-      }))
-
+      const newPlayers = court.players.map(p => ({ ...p, teamNumber: team1Ids.has(p.playerId) ? 1 : 2 }))
       console.log(`[CourtAssignment] Court ${courtKey} re-paired: ${pairingLabel(chosen)}`)
-
-      return {
-        ...prev,
-        courts: { ...prev.courts, [courtKey]: { ...court, players: newPlayers } },
-      }
+      return { ...prev, courts: { ...prev.courts, [courtKey]: { ...court, players: newPlayers } } }
     })
   }, [])
 
@@ -316,7 +305,6 @@ export default function CourtAssignmentClient({
       if (!fromCourt || !toCourt) return prev
       const player = fromCourt.players.find(p => p.playerId === playerId)
       if (!player) return prev
-      // Moved player loses their team number — old partner stays behind.
       const movedPlayer = { ...player, teamNumber: null, sessionId: toCourt.sessionId, locationId: toCourt.locationId }
       return {
         ...prev,
@@ -348,7 +336,6 @@ export default function CourtAssignmentClient({
     setState(prev => {
       const court = prev.courts[courtKey]
       if (!court) return prev
-      // Team pairings travel with the court — all 4 players move together.
       const movedPlayers = court.players.map(p => ({ ...p, sessionId: destination.sessionId, locationId: destination.locationId }))
       return {
         ...prev,
@@ -386,7 +373,11 @@ export default function CourtAssignmentClient({
       const availableLetters = Object.entries(state.courts)
         .filter(([key, c]) => c.locationId === locationId && !usedLetters.has(key))
         .map(([key]) => key).sort()
-      return [...prev, { id: crypto.randomUUID(), locationId, winnersCourtLetter: availableLetters[0] ?? '', secondCourtLetter: availableLetters[1] ?? '', rotationType: 'rotate_partners' }]
+      return [...prev, {
+        id: crypto.randomUUID(), locationId,
+        winnersCourtLetter: availableLetters[0] ?? '',
+        secondCourtLetter: availableLetters[1] ?? '',
+      }]
     })
   }, [state.courts])
 
@@ -427,9 +418,24 @@ export default function CourtAssignmentClient({
       courtsAvailable: Object.values(state.courts).filter(c => c.locationId === locationId).length,
     }))
 
-    const cancelledPlayers = state.unassigned.map(p => ({ availabilityId: p.availabilityId, playerId: p.playerId, sessionId: p.sessionId }))
-    const rotationPairs = rotations.filter(r => r.winnersCourtLetter && r.secondCourtLetter).map(r => ({ winnersCourtLetter: r.winnersCourtLetter, secondCourtLetter: r.secondCourtLetter, rotationType: r.rotationType }))
-    const notes = Object.entries(courtNotes).filter(([, note]) => note?.trim()).map(([courtLetter, note]) => ({ courtLetter, note: note.trim() }))
+    const cancelledPlayers = state.unassigned.map(p => ({
+      availabilityId: p.availabilityId, playerId: p.playerId, sessionId: p.sessionId,
+    }))
+
+    // Rotation pairs: rotationType is now derived from the session format at
+    // display time rather than stored per pairing. We send a placeholder value
+    // to satisfy the route's schema; the actual display uses sessionFormat.
+    const rotationPairs = rotations
+      .filter(r => r.winnersCourtLetter && r.secondCourtLetter)
+      .map(r => ({
+        winnersCourtLetter: r.winnersCourtLetter,
+        secondCourtLetter: r.secondCourtLetter,
+        rotationType: 'rotate_partners', // placeholder — display uses session format
+      }))
+
+    const notes = Object.entries(courtNotes)
+      .filter(([, note]) => note?.trim())
+      .map(([courtLetter, note]) => ({ courtLetter, note: note.trim() }))
 
     try {
       const res = await fetch(`/api/admin/court-assignment/${anchorSessionId}/approve`, {
@@ -494,6 +500,7 @@ export default function CourtAssignmentClient({
         sessionDateLabel={sessionDateLabel} locationSummaries={locationSummaries}
         overCapacityLocations={overCapacityLocations} courtsByLocation={courtsByLocation}
         rotations={rotations} courtNotes={courtNotes} unassigned={state.unassigned}
+        courts={state.courts}
         assignmentEmailCount={assignmentEmailCount} cancellationEmailCount={state.unassigned.length}
         submitting={submitting} submitResult={submitResult}
         onBack={() => setStep('edit')} onConfirm={handleApprove}
@@ -518,11 +525,29 @@ export default function CourtAssignmentClient({
 
           {Object.entries(locData.courts).map(([courtKey, court]) => {
             const isDuplicateNumber = court.courtNumber != null && duplicateCourtNumbers.has(`${court.locationId}:${court.courtNumber}`)
-            const numbersUsedAtLocation = new Set(Object.values(state.courts).filter(c => c.locationId === court.locationId && c.courtLetter !== courtKey && c.courtNumber != null).map(c => c.courtNumber))
+            const numbersUsedAtLocation = new Set(
+              Object.values(state.courts)
+                .filter(c => c.locationId === court.locationId && c.courtLetter !== courtKey && c.courtNumber != null)
+                .map(c => c.courtNumber)
+            )
             const isTentativeCourt = court.players.length < 4
             const teamGroups = groupPlayersByTeam(court.players)
             const pairingOptions = court.players.length === 4 ? generatePairingOptions(court.players) : []
             const activePairingKey = currentPairingKey(court.players)
+
+            // Format instruction for this court on the edit view —
+            // shows the session default with rotation context if paired.
+            const rotationForCourt = rotations.find(r =>
+              r.winnersCourtLetter === courtKey || r.secondCourtLetter === courtKey
+            )
+            const formatInstruction = buildFormatInstruction(
+              court.sessionFormat,
+              rotationForCourt ?? null,
+              (letter) => {
+                const c = state.courts[letter]
+                return c?.courtNumber != null ? `Court ${c.courtNumber}` : `Court ${letter}`
+              }
+            )
 
             return (
               <div key={courtKey} style={{ ...styles.courtCard, borderColor: isTentativeCourt ? '#f59e0b' : '#e5e7eb', background: isTentativeCourt ? '#fffbeb' : '#fff' }}>
@@ -545,7 +570,9 @@ export default function CourtAssignmentClient({
                       <label style={styles.courtNumberLabel} htmlFor={`court-location-${courtKey}`}>Move to</label>
                       <select id={`court-location-${courtKey}`} value='' onChange={e => { const dest = allLocations.find(l => String(l.locationId) === e.target.value); if (dest) handleMoveCourtToLocation(courtKey, dest) }} style={styles.courtNumberSelect} aria-label={`Move Court ${courtKey} to a different location`}>
                         <option value=''>— this location —</option>
-                        {allLocations.filter(l => l.locationId !== court.locationId).map(l => (<option key={l.locationId} value={l.locationId}>{l.locationName}{l.isNew ? ' (new)' : ''}</option>))}
+                        {allLocations.filter(l => l.locationId !== court.locationId).map(l => (
+                          <option key={l.locationId} value={l.locationId}>{l.locationName}{l.isNew ? ' (new)' : ''}</option>
+                        ))}
                       </select>
                     </div>
                   )}
@@ -583,7 +610,7 @@ export default function CourtAssignmentClient({
                   </div>
                 )}
 
-                {/* Change teams dropdown — one dropdown, three options, current pre-selected */}
+                {/* Change teams dropdown */}
                 {pairingOptions.length > 0 && (
                   <div style={styles.pairingRow}>
                     <label style={styles.pairingLabel} htmlFor={`pairing-${courtKey}`}>Change teams</label>
@@ -597,17 +624,31 @@ export default function CourtAssignmentClient({
                   </div>
                 )}
 
+                {/* Format instruction — shown on edit view so organiser can
+                    see what players will be told before approving */}
+                <div style={styles.formatInstructionRow}>
+                  <span style={styles.formatInstructionText}>{formatInstruction}</span>
+                </div>
+
                 {/* Per-court note */}
                 <div style={styles.noteRow}>
                   <label style={styles.noteLabel} htmlFor={`court-note-${courtKey}`}>Note for this court (optional)</label>
-                  <input id={`court-note-${courtKey}`} type='text' value={courtNotes[courtKey] ?? ''} onChange={e => handleUpdateCourtNote(courtKey, e.target.value)} placeholder='e.g. Joe & John keep partners all day' style={styles.noteInput} />
+                  <input id={`court-note-${courtKey}`} type='text' value={courtNotes[courtKey] ?? ''} onChange={e => handleUpdateCourtNote(courtKey, e.target.value)} placeholder='e.g. Override: keep partners all day' style={styles.noteInput} />
                 </div>
               </div>
             )
           })}
 
+          {/* Rotations panel — simplified: only winners/losers direction, no partner choice */}
           {Object.keys(locData.courts).length >= 2 && (
-            <RotationsPanel locationId={locData.locationId} courtsAtLocation={locData.courts} rotations={rotations.filter(r => r.locationId === locData.locationId)} onAdd={handleAddRotation} onUpdate={handleUpdateRotation} onRemove={handleRemoveRotation} />
+            <RotationsPanel
+              locationId={locData.locationId}
+              courtsAtLocation={locData.courts}
+              rotations={rotations.filter(r => r.locationId === locData.locationId)}
+              onAdd={handleAddRotation}
+              onUpdate={handleUpdateRotation}
+              onRemove={handleRemoveRotation}
+            />
           )}
         </div>
       ))}
@@ -639,23 +680,28 @@ export default function CourtAssignmentClient({
 // ---------------------------------------------------------------------------
 // ConfirmationView
 // ---------------------------------------------------------------------------
-function ConfirmationView({ sessionDateLabel, locationSummaries, overCapacityLocations, courtsByLocation, rotations, courtNotes, unassigned, assignmentEmailCount, cancellationEmailCount, submitting, submitResult, onBack, onConfirm }) {
+function ConfirmationView({
+  sessionDateLabel, locationSummaries, overCapacityLocations,
+  courtsByLocation, rotations, courtNotes, unassigned, courts,
+  assignmentEmailCount, cancellationEmailCount,
+  submitting, submitResult, onBack, onConfirm,
+}) {
   const hasOverCapacity = overCapacityLocations.length > 0
 
-  const rotationRows = rotations.filter(r => r.winnersCourtLetter && r.secondCourtLetter).map(r => {
-    const winnersCourt = findCourtByLetter(courtsByLocation, r.winnersCourtLetter)
-    const secondCourt = findCourtByLetter(courtsByLocation, r.secondCourtLetter)
-    const winnersLabel = winnersCourt?.courtNumber != null ? `Court ${winnersCourt.courtNumber}` : `Court ${r.winnersCourtLetter}`
-    const secondLabel = secondCourt?.courtNumber != null ? `Court ${secondCourt.courtNumber}` : `Court ${r.secondCourtLetter}`
-    const partnerText = r.rotationType === 'keep_partners' ? 'keeping the same partner' : 'switching partners each set'
-    return { id: r.id, winnersLabel, secondLabel, partnerText, locationName: winnersCourt?.locationName ?? null }
-  })
+  /** Resolves a court letter to "Court 3" or "Court B (number not yet assigned)" */
+  function getCourtDisplayLabel(letter, forRotation = false) {
+    const court = findCourtByLetter(courtsByLocation, letter)
+    if (court?.courtNumber != null) return `Court ${court.courtNumber}`
+    return forRotation ? `Court ${letter}` : `Court ${letter} (number not yet assigned)`
+  }
 
-  const noteRows = Object.entries(courtNotes).filter(([, note]) => note?.trim()).map(([courtLetter, note]) => {
-    const court = findCourtByLetter(courtsByLocation, courtLetter)
-    const label = court?.courtNumber != null ? `Court ${court.courtNumber}` : `Court ${courtLetter}`
-    return { courtLetter, label, locationName: court?.locationName ?? null, note: note.trim() }
-  })
+  const noteRows = Object.entries(courtNotes)
+    .filter(([, note]) => note?.trim())
+    .map(([courtLetter, note]) => {
+      const court = findCourtByLetter(courtsByLocation, courtLetter)
+      const label = court?.courtNumber != null ? `Court ${court.courtNumber}` : `Court ${courtLetter}`
+      return { courtLetter, label, locationName: court?.locationName ?? null, note: note.trim() }
+    })
 
   return (
     <div style={styles.page}>
@@ -670,9 +716,17 @@ function ConfirmationView({ sessionDateLabel, locationSummaries, overCapacityLoc
           <p style={styles.summaryLine}>{loc.courtCount} court{loc.courtCount !== 1 ? 's' : ''}, {loc.playerCount} players</p>
 
           {Object.entries(courtsByLocation[loc.locationName].courts)
-            .sort(([, a], [, b]) => a.courtNumber != null && b.courtNumber != null ? a.courtNumber - b.courtNumber : a.courtLetter.localeCompare(b.courtLetter))
+            .sort(([, a], [, b]) =>
+              a.courtNumber != null && b.courtNumber != null
+                ? a.courtNumber - b.courtNumber
+                : a.courtLetter.localeCompare(b.courtLetter)
+            )
             .map(([courtKey, court]) => {
-              const courtLabel = court.courtNumber != null ? `Court ${court.courtNumber}` : `Court ${court.courtLetter} (number not yet assigned)`
+              const missingNumber = court.courtNumber == null
+              const courtLabel = missingNumber
+                ? `Court ${court.courtLetter} (number not yet assigned)`
+                : `Court ${court.courtNumber}`
+
               const groups = groupPlayersByTeam(court.players)
               const t1 = groups[1].map(p => p.firstName)
               const t2 = groups[2].map(p => p.firstName)
@@ -683,10 +737,35 @@ function ConfirmationView({ sessionDateLabel, locationSummaries, overCapacityLoc
               if (t2.length === 2) parts.push(t2.join(' & '))
               else if (t2.length > 0) parts.push(`Unpaired: ${t2.join(', ')}`)
               if (unpaired.length > 0) parts.push(`Not yet paired: ${unpaired.join(', ')}`)
+              const pairingDisplay = parts.join('  vs  ')
+
+              // Format instruction for this court on the confirmation screen.
+              const rotationForCourt = rotations.find(r =>
+                r.winnersCourtLetter === courtKey || r.secondCourtLetter === courtKey
+              )
+              const formatInstruction = buildFormatInstruction(
+                court.sessionFormat,
+                rotationForCourt ?? null,
+                (letter) => getCourtDisplayLabel(letter, true)
+              )
+
               return (
-                <p key={courtKey} style={styles.summaryCourtLine}>
-                  <strong>{courtLabel}</strong> — {parts.join('  vs  ')}
-                </p>
+                <div key={courtKey} style={{ marginBottom: '10px', paddingLeft: '8px' }}>
+                  {/* Court label — red if court number not yet assigned */}
+                  <p style={{ ...styles.summaryCourtLine, margin: '0 0 2px 0', color: missingNumber ? '#dc2626' : '#444' }}>
+                    <strong>{courtLabel}</strong> — {pairingDisplay}
+                  </p>
+                  {/* Format instruction — always shown */}
+                  <p style={{ fontSize: '12px', color: '#6b7280', margin: '0 0 0 0', paddingLeft: '2px' }}>
+                    {formatInstruction}
+                  </p>
+                  {/* Court note if present */}
+                  {courtNotes[courtKey]?.trim() && (
+                    <p style={{ fontSize: '12px', color: '#92400e', margin: '2px 0 0 0', paddingLeft: '2px', fontStyle: 'italic' }}>
+                      Note: {courtNotes[courtKey].trim()}
+                    </p>
+                  )}
+                </div>
               )
             })}
 
@@ -700,17 +779,14 @@ function ConfirmationView({ sessionDateLabel, locationSummaries, overCapacityLoc
         </div>
       ))}
 
-      {rotationRows.length > 0 && (
-        <div style={styles.summaryCard}>
-          <h2 style={styles.summarySectionHeading}>Rotations</h2>
-          {rotationRows.map(r => <p key={r.id} style={styles.summaryLine}>{r.locationName ? <strong>{r.locationName}: </strong> : null}{r.winnersLabel} and {r.secondLabel} are paired — {r.winnersLabel} is the winner's court, {r.partnerText}.</p>)}
-        </div>
-      )}
-
       {noteRows.length > 0 && (
         <div style={styles.summaryCard}>
           <h2 style={styles.summarySectionHeading}>Court notes</h2>
-          {noteRows.map(n => <p key={n.courtLetter} style={styles.summaryLine}><strong>{n.locationName ? `${n.locationName} — ` : ''}{n.label}:</strong> {n.note}</p>)}
+          {noteRows.map(n => (
+            <p key={n.courtLetter} style={styles.summaryLine}>
+              <strong>{n.locationName ? `${n.locationName} — ` : ''}{n.label}:</strong> {n.note}
+            </p>
+          ))}
         </div>
       )}
 
@@ -730,7 +806,11 @@ function ConfirmationView({ sessionDateLabel, locationSummaries, overCapacityLoc
       {hasOverCapacity && (
         <div style={styles.capacityBlock}>
           <p style={{ margin: '0 0 4px 0', color: '#991b1b', fontWeight: 600 }}>This can't be confirmed yet</p>
-          {overCapacityLocations.map(loc => <p key={loc.locationName} style={{ margin: '0 0 4px 0', color: '#991b1b', fontSize: '14px' }}>{loc.locationName} has up to {loc.capacityBound} court{loc.capacityBound !== 1 ? 's' : ''} available, but {loc.courtCount} {loc.courtCount !== 1 ? 'are' : 'is'} currently assigned there. Move {loc.courtCount - loc.capacityBound} court{(loc.courtCount - loc.capacityBound) !== 1 ? 's' : ''} to another location.</p>)}
+          {overCapacityLocations.map(loc => (
+            <p key={loc.locationName} style={{ margin: '0 0 4px 0', color: '#991b1b', fontSize: '14px' }}>
+              {loc.locationName} has up to {loc.capacityBound} court{loc.capacityBound !== 1 ? 's' : ''} available, but {loc.courtCount} {loc.courtCount !== 1 ? 'are' : 'is'} currently assigned there. Move {loc.courtCount - loc.capacityBound} court{(loc.courtCount - loc.capacityBound) !== 1 ? 's' : ''} to another location.
+            </p>
+          ))}
           <button onClick={onBack} style={styles.backToFixButton}>Back to edit</button>
         </div>
       )}
@@ -773,7 +853,7 @@ function PlayerRow({ player, currentCourtKey, allCourtLetters, courts, onMove })
       {otherCourts.length > 0 && (
         <select value='' onChange={e => { if (e.target.value) onMove(currentCourtKey, player.playerId, e.target.value) }} style={styles.moveSelect} aria-label={`Move ${player.firstName} to another court`}>
           <option value=''>Move to…</option>
-          {otherCourts.map(courtKey => <option key={courtKey} value={courtKey}>Court {courtKey} ({courts[courtKey]?.players?.length ?? 0}/4)</option>)}
+          {otherCourts.map(k => <option key={k} value={k}>Court {k} ({courts[k]?.players?.length ?? 0}/4)</option>)}
         </select>
       )}
     </div>
@@ -791,46 +871,53 @@ function UnassignedPlayerRow({ player, allCourtLetters, courts, onMove }) {
       {allCourtLetters.length > 0 && (
         <select value='' onChange={e => { if (e.target.value) onMove(player.playerId, e.target.value) }} style={styles.moveSelect} aria-label={`Move ${player.firstName} to a court`}>
           <option value=''>Move to court…</option>
-          {allCourtLetters.map(courtKey => <option key={courtKey} value={courtKey}>Court {courtKey} — {courts[courtKey]?.locationName ?? ''} ({courts[courtKey]?.players?.length ?? 0}/4)</option>)}
+          {allCourtLetters.map(k => <option key={k} value={k}>Court {k} — {courts[k]?.locationName ?? ''} ({courts[k]?.players?.length ?? 0}/4)</option>)}
         </select>
       )}
     </div>
   )
 }
 
+/**
+ * RotationsPanel — simplified. Only winners/losers court designation.
+ * Partner behaviour is inherited from session format; no per-pairing choice.
+ */
 function RotationsPanel({ locationId, courtsAtLocation, rotations, onAdd, onUpdate, onRemove }) {
   const courtLetters = Object.keys(courtsAtLocation).sort()
-  const usedByPairing = (excludeId) => { const used = new Set(); for (const r of rotations) { if (r.id === excludeId) continue; if (r.winnersCourtLetter) used.add(r.winnersCourtLetter); if (r.secondCourtLetter) used.add(r.secondCourtLetter) } return used }
+  const usedByPairing = (excludeId) => {
+    const used = new Set()
+    for (const r of rotations) {
+      if (r.id === excludeId) continue
+      if (r.winnersCourtLetter) used.add(r.winnersCourtLetter)
+      if (r.secondCourtLetter) used.add(r.secondCourtLetter)
+    }
+    return used
+  }
   const allUsed = new Set(rotations.flatMap(r => [r.winnersCourtLetter, r.secondCourtLetter]))
   const canAddMore = courtLetters.filter(l => !allUsed.has(l)).length >= 2
+
   return (
     <div style={styles.rotationsPanel}>
       <h3 style={styles.rotationsHeading}>Rotations</h3>
-      {rotations.length === 0 && <p style={styles.rotationsEmptyNote}>No courts are paired for rotation. Add a pairing if these courts should rotate players.</p>}
+      <p style={styles.rotationsNote}>Partner behaviour (switch or keep) is set by the session format. Use court notes to override for a specific court.</p>
+      {rotations.length === 0 && <p style={styles.rotationsEmptyNote}>No courts are paired for rotation. Add a pairing to set up a winners/losers rotation between two courts.</p>}
       {rotations.map(r => {
         const excluded = usedByPairing(r.id)
         return (
           <div key={r.id} style={styles.rotationRow}>
             <select value={r.winnersCourtLetter} onChange={e => onUpdate(r.id, 'winnersCourtLetter', e.target.value)} style={styles.rotationSelect} aria-label='Winners court'>
-              <option value=''>— court —</option>
+              <option value=''>— winners court —</option>
               {courtLetters.map(letter => <option key={letter} value={letter} disabled={excluded.has(letter) && letter !== r.winnersCourtLetter}>Court {letter}</option>)}
             </select>
-            <span style={styles.rotationConnector}>↔ rotates with</span>
+            <span style={styles.rotationConnector}>↔</span>
             <select value={r.secondCourtLetter} onChange={e => onUpdate(r.id, 'secondCourtLetter', e.target.value)} style={styles.rotationSelect} aria-label='Second court'>
-              <option value=''>— court —</option>
+              <option value=''>— second court —</option>
               {courtLetters.map(letter => <option key={letter} value={letter} disabled={excluded.has(letter) && letter !== r.secondCourtLetter}>Court {letter}</option>)}
             </select>
             <div style={styles.rotationSubRow}>
               <label style={styles.rotationSubLabel}>Winners court:</label>
               <select value={r.winnersCourtLetter} onChange={e => { const nw = e.target.value; const ns = nw === r.winnersCourtLetter ? r.secondCourtLetter : r.winnersCourtLetter; onUpdate(r.id, 'winnersCourtLetter', nw); onUpdate(r.id, 'secondCourtLetter', ns) }} style={styles.rotationSelectSmall} aria-label='Which court is the winners court'>
                 {[r.winnersCourtLetter, r.secondCourtLetter].filter(Boolean).map(letter => <option key={letter} value={letter}>Court {letter}</option>)}
-              </select>
-            </div>
-            <div style={styles.rotationSubRow}>
-              <label style={styles.rotationSubLabel}>Partners:</label>
-              <select value={r.rotationType} onChange={e => onUpdate(r.id, 'rotationType', e.target.value)} style={styles.rotationSelectSmall} aria-label='Partner rotation type'>
-                <option value='rotate_partners'>Switch each set</option>
-                <option value='keep_partners'>Keep same partner</option>
               </select>
             </div>
             <button onClick={() => onRemove(r.id)} style={styles.removeRotationButton} aria-label='Remove this rotation pairing'>Remove</button>
@@ -868,6 +955,8 @@ const styles = {
   pairingRow: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed #e5e7eb' },
   pairingLabel: { fontSize: '13px', color: '#6b7280', whiteSpace: 'nowrap', flexShrink: 0 },
   pairingSelect: { fontSize: '14px', padding: '7px 10px', borderRadius: '6px', border: '1px solid #d1d5db', background: '#fff', color: '#111', flex: 1 },
+  formatInstructionRow: { marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #f3f4f6' },
+  formatInstructionText: { fontSize: '12px', color: '#6b7280', fontStyle: 'italic' },
   noteRow: { marginTop: '10px' },
   noteLabel: { display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' },
   noteInput: { width: '100%', fontSize: '14px', padding: '8px 10px', borderRadius: '6px', border: '1px solid #d1d5db', background: '#fff', color: '#111', boxSizing: 'border-box' },
@@ -880,7 +969,8 @@ const styles = {
   errorBlock: { background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '12px 16px' },
   card: { borderRadius: '10px', padding: '16px', marginBottom: '16px' },
   rotationsPanel: { border: '1px solid #e5e7eb', borderRadius: '10px', padding: '16px', marginTop: '8px', marginBottom: '12px', background: '#f9fafb' },
-  rotationsHeading: { fontSize: '15px', fontWeight: '600', color: '#374151', margin: '0 0 8px 0' },
+  rotationsHeading: { fontSize: '15px', fontWeight: '600', color: '#374151', margin: '0 0 4px 0' },
+  rotationsNote: { fontSize: '12px', color: '#9ca3af', margin: '0 0 10px 0', lineHeight: '1.5' },
   rotationsEmptyNote: { fontSize: '13px', color: '#6b7280', margin: '0 0 8px 0', lineHeight: '1.5' },
   rotationRow: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px', padding: '10px', background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', marginBottom: '8px' },
   rotationSelect: { fontSize: '14px', padding: '6px 8px', borderRadius: '6px', border: '1px solid #d1d5db', background: '#fff', color: '#111' },

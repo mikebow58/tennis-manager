@@ -18,7 +18,8 @@
  *
  * DATA LOADED:
  *   - All sibling sessions for the day (resolved via week_id + session_date)
- *   - court_assignments records for all sibling sessions (including team_number)
+ *   - court_assignments records for all sibling sessions (including team_number
+ *     and partner_setting)
  *   - availability records (confirmed + tentative) for all sibling sessions
  *   - Player details (name, skill) for display
  *   - courts_available per session (to constrain court number dropdowns)
@@ -154,6 +155,10 @@ export default async function CourtAssignmentPage({ params }) {
   //    court_number may be null — organiser assigns on this screen.
   //    team_number (1 or 2) is set by Procedure 2's snake pairing and
   //    identifies which partnership each player belongs to on their court.
+  //    partner_setting stores the organiser's per-court partner behaviour
+  //    override ('switch_partners' | 'paired_rotation'). Null means the
+  //    court inherits the session format default. For courts in a rotation
+  //    pairing, this field is ignored — the session format governs.
   // ---------------------------------------------------------------------------
   const { data: courtAssignments, error: caError } = await supabaseAdmin
     .from('court_assignments')
@@ -165,6 +170,7 @@ export default async function CourtAssignmentPage({ params }) {
       court_letter,
       court_number,
       team_number,
+      partner_setting,
       assignment_status,
       players ( id, first_name, last_name, skill_admin, skill_self )
     `)

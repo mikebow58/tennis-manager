@@ -10,31 +10,35 @@ const formatDateString = (dateStr) => {
 };
 
 /**
- * Derives the format instruction text for one court on the printed sheet.
+ * Builds the format instruction for one court on the printed sheet.
  *
- * session.format values:
- *   'switch_partners'  → players switch partners after each set
- *   'paired_rotation'  → players keep the same partner (rotate as a pair)
- *   null / other       → treated as keep partners
+ * Logic:
+ *   - Court is in a rotation pairing → session format governs (per-court
+ *     partner_setting is ignored). Full text includes winners/losers direction.
+ *   - Court is NOT in a rotation pairing → per-court partner_setting governs,
+ *     falling back to session format when null.
  *
- * If the court is part of a rotation pairing, the instruction includes
- * the winners/losers direction. Otherwise it just states the partner rule.
- *
- * @param {string|null} sessionFormat
- * @param {object|null} rotationRow   — matching court_rotations row (if any)
- * @param {Function}    getCourtNum   — (letter) => display label e.g. "Court 3"
- * @returns {string}
+ * session.format / partner_setting values:
+ *   'switch_partners'  → "Switch partners each set"
+ *   'paired_rotation'  → "Keep partners each set"
+ *   null               → treated as 'paired_rotation' (keep partners)
  */
-function buildFormatInstruction(sessionFormat, rotationRow, getCourtNum) {
-  const partnerText = sessionFormat === 'switch_partners'
+function buildFormatInstruction(partnerSetting, sessionFormat, rotationRow, getCourtLabel) {
+  if (rotationRow) {
+    // Rotation pairing — session format governs
+    const partnerText = sessionFormat === 'switch_partners'
+      ? 'Switch partners each set'
+      : 'Keep partners each set';
+    const winnersLabel = getCourtLabel(rotationRow.winners_court_letter);
+    const secondLabel  = getCourtLabel(rotationRow.second_court_letter);
+    return `Winners to ${winnersLabel}, Losers to ${secondLabel} · ${partnerText}`;
+  }
+
+  // No rotation — use per-court override, fall back to session format
+  const effective = partnerSetting ?? sessionFormat ?? 'paired_rotation';
+  return effective === 'switch_partners'
     ? 'Switch partners each set'
     : 'Keep partners each set';
-
-  if (!rotationRow) return partnerText;
-
-  const winnersLabel = getCourtNum(rotationRow.winners_court_letter);
-  const secondLabel  = getCourtNum(rotationRow.second_court_letter);
-  return `Winners to ${winnersLabel}, Losers to ${secondLabel} · ${partnerText}`;
 }
 
 export default function PrintSheetClient({ daySessions, locationMap, assignments, rotations, notes }) {
@@ -52,7 +56,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
     }
   });
 
-  const getCourtNumBySessionAndLetter = (sessionId, letter) => {
+  const getCourtLabelBySessionAndLetter = (sessionId, letter) => {
     const num = letterToNumberMap[`${sessionId}_${letter}`];
     return num != null ? `Court ${num}` : `Court ${letter}`;
   };
@@ -80,7 +84,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
         groupedData[session.id].courts[cNum] = {
           courtNumber: cNum,
           courtLetter: asg.court_letter,
-          // Players grouped by team for paired display
+          partnerSetting: asg.partner_setting ?? null,
           teams: { 1: [], 2: [], unpaired: [] },
           formatInstruction: '',
           noteText: ''
@@ -92,6 +96,10 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
         if (asg.team_number === 1)      court.teams[1].push(fullName);
         else if (asg.team_number === 2) court.teams[2].push(fullName);
         else                            court.teams.unpaired.push(fullName);
+        // Keep the per-court partner_setting from the first row seen for this court
+        if (court.partnerSetting == null && asg.partner_setting != null) {
+          court.partnerSetting = asg.partner_setting;
+        }
       }
     });
 
@@ -105,9 +113,10 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
       ) ?? null;
 
       court.formatInstruction = buildFormatInstruction(
+        court.partnerSetting,
         session.format ?? null,
         rotationRow,
-        (letter) => getCourtNumBySessionAndLetter(session.id, letter)
+        (letter) => getCourtLabelBySessionAndLetter(session.id, letter)
       );
 
       const noteRow = notes.find(n => n.court_letter === court.courtLetter);
@@ -161,7 +170,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
                           </h2>
                         </div>
 
-                        {/* Team roster — two stacked pairs with a divider between teams */}
+                        {/* Team roster — two stacked pairs with divider between teams */}
                         <div className="space-y-3">
                           {[1, 2].map(teamNum => (
                             court.teams[teamNum].length > 0 && (
@@ -189,7 +198,7 @@ export default function PrintSheetClient({ daySessions, locationMap, assignments
                         </div>
                       </div>
 
-                      {/* Rules & Notes — always shows format instruction */}
+                      {/* Rules & Notes footer — always shown */}
                       <div className="mt-6 pt-4 border-t-2 border-dotted border-gray-300 text-gray-700 space-y-1.5 font-medium">
                         <p className="leading-tight font-extrabold text-gray-900 text-[13pt]">
                           {court.formatInstruction}

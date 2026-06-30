@@ -13,6 +13,8 @@
 // supported here — names are shown as read-only context only.
 
 import { useState, useEffect } from 'react'
+import Select from '@/app/components/Select'
+import { getTimeOptions } from '@/lib/utils'
 
 export default function AdminSettingsPage() {
   const [loading, setLoading] = useState(true)
@@ -228,12 +230,15 @@ export default function AdminSettingsPage() {
           </p>
 
           <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-            <input
-              type="time"
-              value={startTime ? startTime.slice(0, 5) : ''}
-              onChange={(e) => setStartTime(`${e.target.value}:00`)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent w-full sm:w-40"
-            />
+            <div className="w-full sm:w-40">
+              <Select
+                name="start_time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                options={getTimeOptions()}
+                placeholder="Select time..."
+              />
+            </div>
             <button
               onClick={saveStartTime}
               disabled={startTimeSaving || !startTime}

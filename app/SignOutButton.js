@@ -32,6 +32,7 @@ export default function SignOutButton() {
         <a href="/" className="text-sm text-gray-600 hover:text-gray-900">Dashboard</a>
         <a href="/players" className="text-sm text-gray-600 hover:text-gray-900">Players</a>
         <a href="/weeks" className="text-sm text-gray-600 hover:text-gray-900">Weeks</a>
+        <a href="/admin/settings" className="text-sm text-gray-600 hover:text-gray-900">Settings</a>
       </div>
       <button
         onClick={handleSignOut}

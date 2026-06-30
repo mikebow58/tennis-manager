@@ -57,6 +57,7 @@ import {
   sendCourtCancellationNotice,
   sendBackstopCancellationAlert,
 } from '@/lib/email'
+import { getAdminEmail } from '@/lib/admin-settings'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -91,7 +92,7 @@ export async function GET(request) {
 
   console.log('[daily-8pm-backstop] Processing sessions for tomorrow:', tomorrowStr)
 
-  const adminEmail = process.env.ADMIN_EMAIL
+  const adminEmail = await getAdminEmail()
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
   if (!adminEmail) {

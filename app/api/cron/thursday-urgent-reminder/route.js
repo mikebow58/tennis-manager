@@ -23,6 +23,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendUrgentApprovalReminderNotification } from '@/lib/email'
+import { getAdminEmail } from '@/lib/admin-settings'
 
 export async function GET(request) {
   const cronStart = Date.now()
@@ -35,7 +36,7 @@ export async function GET(request) {
     return new Response('Unauthorised', { status: 401 })
   }
 
-  const adminEmail = process.env.ADMIN_EMAIL
+  const adminEmail = await getAdminEmail()
   if (!adminEmail) {
     console.error('[thursday-urgent-reminder] ADMIN_EMAIL environment variable is not set')
     return new Response('Server configuration error', { status: 500 })

@@ -35,6 +35,7 @@ import {
   sendWeekApprovedNotification,
   sendSignupRequestBatch,
 } from '@/lib/email'
+import { getAdminEmail } from '@/lib/admin-settings'
 
 export async function POST(request, { params }) {
   const startTime = Date.now()
@@ -115,7 +116,7 @@ export async function POST(request, { params }) {
 
     // Notify organiser that the week has been approved and the friday cron
     // will send signup links automatically on the scheduled day.
-    const adminEmail = process.env.ADMIN_EMAIL
+    const adminEmail = await getAdminEmail()
     if (adminEmail) {
       await sendWeekApprovedNotification({ adminEmail, weekLabel, weekId })
       console.log('[approve] Organiser approval confirmation email sent')

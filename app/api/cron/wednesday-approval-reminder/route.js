@@ -22,6 +22,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendApprovalReminderNotification } from '@/lib/email'
+import { getAdminEmail } from '@/lib/admin-settings'
 
 // Vercel calls cron routes with a GET request and validates the
 // CRON_SECRET header. This prevents the endpoint from being triggered
@@ -38,7 +39,7 @@ export async function GET(request) {
   }
 
   // Read required environment variables up front.
-  const adminEmail = process.env.ADMIN_EMAIL
+  const adminEmail = await getAdminEmail()
   if (!adminEmail) {
     console.error('[wednesday-approval-reminder] ADMIN_EMAIL environment variable is not set')
     return new Response('Server configuration error', { status: 500 })

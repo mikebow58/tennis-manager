@@ -37,6 +37,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendEscalationNotice } from '@/lib/email'
 import { formatDeadlineTime } from '@/lib/utils'
+import { getAdminEmail } from '@/lib/admin-settings'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -117,7 +118,7 @@ export async function GET(request) {
 
   console.log(`[daily-5pm-escalation] Found ${tomorrowSessions.length} closed session(s) for tomorrow.`)
 
-  const adminEmail = process.env.ADMIN_EMAIL
+  const adminEmail = await getAdminEmail()
   if (!adminEmail) {
     console.error('[daily-5pm-escalation] ADMIN_EMAIL not set — cannot send escalation notices')
   }

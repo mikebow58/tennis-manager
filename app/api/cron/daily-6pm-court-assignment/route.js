@@ -49,6 +49,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendCourtAssignmentReview } from '@/lib/email'
 import { runProcedure2 } from '@/lib/court-assignment'
 import { formatDeadlineTime } from '@/lib/utils'
+import { getAdminEmail } from '@/lib/admin-settings'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -138,7 +139,7 @@ export async function GET(request) {
     `[daily-6pm-court-assignment] Found ${tomorrowSessions.length} session(s) to evaluate.`
   )
 
-  const adminEmail = process.env.ADMIN_EMAIL
+  const adminEmail = await getAdminEmail()
   if (!adminEmail) {
     console.error('[daily-6pm-court-assignment] ADMIN_EMAIL not set — cannot send notifications')
   }

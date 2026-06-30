@@ -29,6 +29,7 @@ import {
   sendSignupRequestBatch,
   sendSignupSkippedNotification,
 } from '@/lib/email'
+import { getAdminEmail } from '@/lib/admin-settings'
 
 export async function GET(request) {
   // Record entry time for execution duration logging.
@@ -125,7 +126,7 @@ export async function GET(request) {
   if (week.status === 'pending_approval') {
     console.log('[friday-signup-send] Week still in pending_approval — skipping send, notifying organiser.')
 
-    const adminEmail = process.env.ADMIN_EMAIL
+    const adminEmail = await getAdminEmail()
     if (!adminEmail) {
       console.error('[friday-signup-send] ADMIN_EMAIL env var not set — cannot send skip notification.')
       return new Response('Configuration error: ADMIN_EMAIL not set', { status: 500 })

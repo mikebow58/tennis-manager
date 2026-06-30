@@ -31,6 +31,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendSubRequestBroadcastStub } from '@/lib/email'
 import { resolveSkill } from '@/lib/court-balancing'
 import { buildTargetingPool } from '@/lib/targeting'
+import { getAdminEmail } from '@/lib/admin-settings'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -108,7 +109,7 @@ export async function GET(request) {
       outcomes.noFillInThisMorning = 1
     }
 
-    const adminEmail = process.env.ADMIN_EMAIL
+    const adminEmail = await getAdminEmail()
     const tomorrowDateObj = new Date(tomorrowStr + 'T12:00:00Z')
     const sessionDayLabel = tomorrowDateObj.toLocaleDateString('en-US', {
       weekday: 'long',

@@ -5,17 +5,40 @@
  * Note: will drift 1 hour early in MST (November–March). See project
  * decisions log — accepted for now, revisit before first winter season.
  *
- * Three independent checks run every day. All three always run regardless
- * of the outcome of the others. Any combination may produce emissions.
+ * Three checks run every day. All three always run regardless of the
+ * outcome of the others. Any combination may produce emissions.
  *
- * CHECK A — Pre-close fill-in (Wed–Sat only): DEFERRED. Not yet built.
- *   Will fire targeted fill-in requests for short sessions scheduled
- *   for tomorrow. Requires First Call list and skill targeting logic.
+ * CHECK A — RETIRED as of this revision.
+ *   Previously: a standalone pre-close fill-in check for Wed–Sat sessions
+ *   scheduled for "tomorrow." This was never reachable in practice — by
+ *   the time a Wed–Sat session's date is "tomorrow," its reminder has
+ *   already fired 1–2 days earlier (per the day-of-week timing rule),
+ *   which also flips sessions.status from 'open' to 'closed'. Check A's
+ *   query filtered on status = 'open', so it could never match a Wed–Sat
+ *   session in the wild. This was a timing assumption baked into the
+ *   original Phase 1 cron map that was never reconciled against the
+ *   reminder-timing rule once that rule was finalised.
+ *
+ *   FIX: the initial sub-request broadcast now fires from inside Check B,
+ *   immediately after Procedure 1 determines a session closed short
+ *   (Outcome B) — for every day of week, including Mon/Tue. This replaces
+ *   Check A entirely. See Step 5.5 inside Check B below.
+ *
+ *   KNOWN FOLLOW-UP NOT YET FIXED: daily_10am_fillin_expansion still
+ *   expects sessions.session_date = tomorrow relative to when the
+ *   first_call sub_requests row was sent. That still holds for Mon/Tue
+ *   (reminder fires 1 day prior). It no longer holds for Wed–Sat (reminder
+ *   now fires 2 days prior from this new broadcast point), so the 10am
+ *   expansion cron will not find and expand Wed–Sat first_call requests
+ *   sent here. Needs a follow-up fix before the waitlist-first check
+ *   (Phase 4) can be considered fully reliable for Wed–Sat sessions.
  *
  * CHECK B — Reminder sends:
  *   Finds sessions whose reminder is due today (per day-of-week timing
  *   rules), runs Procedure 1 (initial court balancing) on each, sends
- *   tiered reminder emails (confirmed or tentative), and closes the session.
+ *   tiered reminder emails (confirmed or tentative), fires the initial
+ *   sub-request broadcast if the session closed short (Step 5.5, new),
+ *   and closes the session.
  *
  * CHECK C — Week close:
  *   Finds weeks in 'sent' status where all child sessions have passed
@@ -24,16 +47,20 @@
  * Tables read:  weeks, sessions, availability, players, locations
  * Tables written: sessions (status, reminder_sent_at),
  *                 availability (status, court_assignment_status),
+ *                 sub_requests, sub_request_recipients (new, Step 5.5),
  *                 weeks (status, closed_at)
  *
  * Emails sent:
  *   - Confirmed players: sendConfirmedReminderBatch (Check B)
  *   - Tentative players: sendTentativeReminderBatch (Check B)
+ *   - Organiser stub broadcast: sendSubRequestBroadcastStub (Check B, Step 5.5,
+ *     only if session closed short)
  *
  * References:
  *   Phase 1 Cron Map — Section 4.5 (Check B) and Section 4.5 (Check C)
  *   Phase 2 State Machines — Section 4.4 (Procedure 1), Section 4.2
- *   Automation Logic — Section 2.1 (tiered reminder system)
+ *   Automation Logic — Section 2.1 (tiered reminder system), Section 12
+ *     (cancellation and sub request logic — subsNeeded formula reused here)
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -44,6 +71,7 @@ import {
 } from '@/lib/email'
 import { runProcedure1, resolveSkill, SKILL_SELF_TO_ADMIN } from '@/lib/court-balancing'
 import { buildTargetingPool } from '@/lib/targeting'
+import { getAdminEmail } from '@/lib/admin-settings'
 
 export async function GET(request) {
   // Record entry time so execution duration is calculable from logs.
@@ -81,247 +109,38 @@ export async function GET(request) {
 
   const todayStr = toMountainDateStr(nowUtc)
 
-  // Tomorrow's date — used by Check B reminder timing logic.
   const tomorrowDate = new Date(nowUtc)
   tomorrowDate.setUTCDate(nowUtc.getUTCDate() + 1)
   const tomorrowStr = toMountainDateStr(tomorrowDate)
 
   console.log('[daily-8am] Today (MT):', todayStr, '| Tomorrow (MT):', tomorrowStr)
 
-  // Collect outcome summaries from each check for the final response.
-  const outcomes = { checkA: 'deferred', checkB: null, checkC: null }
-
- // ==================================================================
-  // CHECK A — Pre-close fill-in (Wed–Sat only)
-  //
-  // Decision tree (Phase 1 Section 4.5 Check A):
-  //   1. Only runs if tomorrow is Wed–Sat (today is Tue–Fri).
-  //   2. Query sessions WHERE day = tomorrow AND status = 'open'
-  //      AND reminder_sent_at IS NULL.
-  //   3. For each: check if session is short (confirmed_count % 4 != 0).
-  //   4. If short and no fill-in sent today: build targeting pool,
-  //      insert sub_requests record (request_type = 'first_call'),
-  //      insert sub_request_recipients rows, send stub broadcast.
-  //
-  // References:
-  //   Phase 1 Section 4.5 Check A
-  //   Phase 1 Section 4.6 — daily_10am_fillin_expansion
-  //   Automation Logic Section 6.1
-  // ==================================================================
-  console.log('[daily-8am] Check A: starting pre-close fill-in check.')
-
-  try {
-    // Check A only applies Tue–Fri (so that tomorrow is Wed–Sat).
-    const todayDayOfWeek = nowUtc.getUTCDay() // 0=Sun ... 6=Sat
-    // Adjusted for Mountain Time — use tomorrowStr's day of week.
-    const tomorrowDateObj = new Date(tomorrowStr + 'T12:00:00Z')
-    const tomorrowDayOfWeek = tomorrowDateObj.getUTCDay()
-    // Wed=3, Thu=4, Fri=5, Sat=6
-    const tomorrowIsWedToSat = tomorrowDayOfWeek >= 3 && tomorrowDayOfWeek <= 6
-
-    if (!tomorrowIsWedToSat) {
-      console.log(
-        `[daily-8am] Check A: tomorrow (${tomorrowStr}) is not Wed–Sat — skipping.`
-      )
-      outcomes.checkA = 'skipped'
-    } else {
-      console.log(
-        `[daily-8am] Check A: tomorrow is ${tomorrowStr} (day ${tomorrowDayOfWeek}) — evaluating sessions.`
-      )
-
-      // Fetch open sessions scheduled for tomorrow in sent weeks.
-      const { data: tomorrowSessions, error: tomorrowError } = await supabaseAdmin
-        .from('sessions')
-        .select(`
-          id,
-          session_date,
-          start_time,
-          courts_available,
-          match_type,
-          location_id,
-          locations ( name ),
-          weeks!inner ( status )
-        `)
-        .eq('session_date', tomorrowStr)
-        .eq('status', 'open')
-        .is('reminder_sent_at', null)
-        .is('cancelled_at', null)
-        .eq('weeks.status', 'sent')
-
-      if (tomorrowError) {
-        console.error('[daily-8am] Check A: error querying tomorrow sessions:', tomorrowError.message)
-        outcomes.checkA = 'error'
-      } else {
-        console.log(`[daily-8am] Check A: found ${tomorrowSessions.length} open session(s) for tomorrow.`)
-
-        let fillInsSent = 0
-        const sessionDayLabel = tomorrowDateObj.toLocaleDateString('en-US', {
-          weekday: 'long',
-          timeZone: 'UTC',
-        })
-
-        for (const session of tomorrowSessions) {
-          // ------------------------------------------------------------
-          // Step 1: Get current confirmed count for this session.
-          // ------------------------------------------------------------
-          const { data: confirmedAvail, error: confirmedError } = await supabaseAdmin
-            .from('availability')
-            .select('player_id, players ( skill_admin, skill_self )')
-            .eq('session_id', session.id)
-            .eq('status', 'confirmed')
-
-          if (confirmedError) {
-            console.error(
-              `[daily-8am] Check A: error fetching availability for session ${session.id}:`,
-              confirmedError.message
-            )
-            continue
-          }
-
-          const confirmedCount = confirmedAvail.length
-          const capacity = (session.courts_available ?? 0) * 4
-          const isShort = confirmedCount % 4 !== 0
-
-          console.log(
-            `[daily-8am] Check A: session ${session.id} — confirmedCount=${confirmedCount} ` +
-            `capacity=${capacity} isShort=${isShort}`
-          )
-
-          if (!isShort) {
-            console.log(`[daily-8am] Check A: session ${session.id} is not short — skipping.`)
-            continue
-          }
-
-          // ------------------------------------------------------------
-          // Step 2: Check if a fill-in request was already sent today.
-          // ------------------------------------------------------------
-          const todayStart = new Date(todayStr + 'T00:00:00Z').toISOString()
-          const { data: todaySubRequest } = await supabaseAdmin
-            .from('sub_requests')
-            .select('id')
-            .eq('session_id', session.id)
-            .eq('request_type', 'first_call')
-            .gte('sent_at', todayStart)
-            .maybeSingle()
-
-          if (todaySubRequest) {
-            console.log(
-              `[daily-8am] Check A: session ${session.id} — fill-in already sent today. Skipping.`
-            )
-            continue
-          }
-
-          // ------------------------------------------------------------
-          // Step 3: Build targeting pool.
-          // ------------------------------------------------------------
-          const rosterSkills = confirmedAvail.map((a) => resolveSkill(a.players))
-          const sessionMatchType = session.match_type ?? 'doubles'
-          const locationName = session.locations?.name ?? 'TBD'
-
-          const { firstCallPool } = await buildTargetingPool({
-            sessionId: session.id,
-            sessionDayLabel,
-            sessionMatchType,
-            rosterSkills,
-          })
-
-          console.log(
-            `[daily-8am] Check A: session ${session.id} — firstCallPool size=${firstCallPool.length}`
-          )
-
-          // ------------------------------------------------------------
-          // Step 4: Insert sub_requests record.
-          // ------------------------------------------------------------
-          const { data: subRequest, error: subInsertError } = await supabaseAdmin
-            .from('sub_requests')
-            .insert({
-              session_id: session.id,
-              sent_at: new Date().toISOString(),
-              request_type: 'first_call',
-              status: 'active',
-            })
-            .select('id')
-            .single()
-
-          if (subInsertError || !subRequest) {
-            console.error(
-              `[daily-8am] Check A: failed to insert sub_requests for session ${session.id}:`,
-              subInsertError?.message
-            )
-            continue
-          }
-
-          console.log(
-            `[daily-8am] Check A: sub_requests record created id=${subRequest.id} ` +
-            `for session ${session.id}.`
-          )
-
-          // ------------------------------------------------------------
-          // Step 5: Insert sub_request_recipients rows.
-          // ------------------------------------------------------------
-          if (firstCallPool.length > 0) {
-            const recipientRows = firstCallPool.map((player) => ({
-              sub_request_id: subRequest.id,
-              player_id: player.playerId,
-              sent_at: new Date().toISOString(),
-              response: 'no_response',
-            }))
-
-            const { error: recipientsError } = await supabaseAdmin
-              .from('sub_request_recipients')
-              .insert(recipientRows)
-
-            if (recipientsError) {
-              console.error(
-                `[daily-8am] Check A: error inserting sub_request_recipients for session ${session.id}:`,
-                recipientsError.message
-              )
-              // Non-fatal — sub_requests record exists, recipients tracking failed.
-              // Log and continue to stub broadcast.
-            } else {
-              console.log(
-                `[daily-8am] Check A: ${recipientRows.length} sub_request_recipients inserted.`
-              )
-            }
-          } else {
-            console.log(
-              `[daily-8am] Check A: no First Call players in pool — ` +
-              `sub_requests record created but no recipients inserted. ` +
-              `daily_10am_fillin_expansion will expand to all available.`
-            )
-          }
-
-          // ------------------------------------------------------------
-          // Step 6: Send stub broadcast (organiser notification).
-          // Real player targeting email deferred until lib/targeting.js
-          // email functions are built.
-          // ------------------------------------------------------------
-          const adminEmail = process.env.ADMIN_EMAIL
-          if (adminEmail) {
-            await sendSubRequestBroadcastStub({
-              adminEmail,
-              sessionDateLabel: tomorrowDateObj.toLocaleDateString('en-US', {
-                weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
-              }),
-              locationName,
-              openSpots: 4 - (confirmedCount % 4),
-              subRequestId: subRequest.id,
-            }).catch((err) =>
-              console.error(`[daily-8am] Check A: stub broadcast failed for session ${session.id}:`, err)
-            )
-          }
-
-          fillInsSent++
-        } // end for loop over tomorrow sessions
-
-        outcomes.checkA = { fillInsSent }
-        console.log('[daily-8am] Check A complete:', JSON.stringify(outcomes.checkA))
-      }
-    }
-  } catch (err) {
-    console.error('[daily-8am] Check A: unexpected error:', err)
-    outcomes.checkA = 'error'
+  // Resolve the organiser email once up front — used by both Check B's
+  // Step 5.5 stub broadcast and available for future use in this file.
+  const adminEmail = await getAdminEmail()
+  if (!adminEmail) {
+    console.error('[daily-8am] getAdminEmail() returned no value — organiser alerts will be skipped where applicable')
   }
+
+  // Collect outcome summaries from each check for the final response.
+  const outcomes = { checkA: null, checkB: null, checkC: null }
+
+  // ==================================================================
+  // CHECK A — RETIRED.
+  //
+  // Previously ran a standalone pre-close fill-in check for Wed–Sat
+  // sessions dated "tomorrow." Removed because it could never match a
+  // real session — see file header comment for the full explanation.
+  // Its useful logic (targeting pool build, sub_requests insert,
+  // sub_request_recipients insert, stub broadcast) has been folded into
+  // Check B, Step 5.5 below, which fires at the correct moment: the
+  // instant Procedure 1 determines a session closed short.
+  // ==================================================================
+  outcomes.checkA = {
+    status: 'retired',
+    note: 'Folded into Check B Step 5.5 — see file header comment.',
+  }
+  console.log('[daily-8am] Check A: retired. Logic now lives in Check B Step 5.5.')
 
   // ==================================================================
   // CHECK B — Reminder sends
@@ -335,16 +154,17 @@ export async function GET(request) {
   //      Wed–Sat session   → remind 2 days prior (session_date - 2 days)
   //   3. If due: run Procedure 1 (initial court balancing).
   //   4. Send tiered reminders (confirmed or tentative).
-  //   5. UPDATE sessions SET status = 'closed', reminder_sent_at = now().
+  //   5. NEW — Step 5.5: if the session closed short (tentative players
+  //      exist), fire the initial sub-request broadcast immediately.
+  //   6. UPDATE sessions SET status = 'closed', reminder_sent_at = now().
   // ==================================================================
   console.log('[daily-8am] Check B: starting reminder send check.')
 
   try {
     // Fetch all open, un-reminded, non-cancelled sessions across all
-    // weeks currently in 'sent' status. Include location join for the
-    // confirmed reminder email and availability for Procedure 1.
-    // We fetch availability and players separately per session below
-    // to keep queries manageable and logging granular.
+    // weeks currently in 'sent' status. match_type is now included —
+    // required by buildTargetingPool in Step 5.5 (previously only
+    // fetched by the now-retired Check A).
     const { data: openSessions, error: sessionsError } = await supabaseAdmin
       .from('sessions')
       .select(`
@@ -352,6 +172,7 @@ export async function GET(request) {
         session_date,
         start_time,
         courts_available,
+        match_type,
         notes,
         week_id,
         locations ( id, name ),
@@ -372,11 +193,11 @@ export async function GET(request) {
       let sessionsReminded = 0
       let totalConfirmed = 0
       let totalTentative = 0
+      let subRequestsFired = 0
 
       for (const session of openSessions) {
         // ----------------------------------------------------------------
         // Step 1: Determine if reminder is due today for this session.
-        // Parse session_date and compute the date the reminder should fire.
         // ----------------------------------------------------------------
         const sessionDate = new Date(session.session_date + 'T12:00:00Z')
         const dayOfWeek = sessionDate.getUTCDay()
@@ -410,8 +231,6 @@ export async function GET(request) {
         // Step 2: Fetch all signed-up players for this session.
         // All players are currently in 'confirmed' status at this point —
         // 'tentative' is a Procedure 1 output, not set at signup time.
-        // We need skill_admin (primary) and skill_self (fallback) for
-        // the balancing algorithm, plus availability.created_at for FIFO.
         // ----------------------------------------------------------------
         const { data: availability, error: availError } = await supabaseAdmin
           .from('availability')
@@ -447,8 +266,8 @@ export async function GET(request) {
 
         if (playerCount === 0) {
           // No players signed up — close the session without sending any
-          // reminders. Sub request logic is not triggered here (no one
-          // was ever confirmed). Log and close.
+          // reminders or firing a sub request. Nobody was ever confirmed,
+          // so there's no tentative player and nothing to broadcast for.
           console.log(
             `[daily-8am] Check B: session ${session.id} has 0 players — closing with no reminders.`
           )
@@ -462,7 +281,6 @@ export async function GET(request) {
 
         // ----------------------------------------------------------------
         // Step 3: Resolve each player's effective skill level.
-        // Skill resolution delegated to lib/court-balancing.js.
         // ----------------------------------------------------------------
         const players = availability.map((avail) => ({
           availabilityId: avail.id,
@@ -476,7 +294,6 @@ export async function GET(request) {
 
         // ----------------------------------------------------------------
         // Step 4: Run Procedure 1 — Initial Court Balancing.
-        // Full algorithm in lib/court-balancing.js.
         // ----------------------------------------------------------------
         const { confirmedIds: confirmedPlayerIds, tentativeCount, bestScore, courtsCount } =
           runProcedure1(players)
@@ -489,9 +306,6 @@ export async function GET(request) {
 
         // ----------------------------------------------------------------
         // Step 5: Write Procedure 1 results to the availability table.
-        // Players in confirmedPlayerIds stay confirmed.
-        // All others transition to tentative.
-        // court_assignment_status mirrors availability.status at this stage.
         // ----------------------------------------------------------------
         const confirmedAvailIds = players
           .filter((p) => confirmedPlayerIds.has(p.availabilityId))
@@ -526,8 +340,6 @@ export async function GET(request) {
         }
 
         // Confirmed players: court_assignment_status set to 'confirmed'.
-        // availability.status is already 'confirmed' from signup — only
-        // court_assignment_status needs to be set here.
         if (confirmedAvailIds.length > 0) {
           const { error: confirmedError } = await supabaseAdmin
             .from('availability')
@@ -544,17 +356,140 @@ export async function GET(request) {
         }
 
         // ----------------------------------------------------------------
+        // Step 5.5 — NEW: Fire the initial sub-request broadcast if this
+        // session closed short.
+        //
+        // This replaces the retired Check A. It fires for every day of
+        // week (Mon–Sat), per explicit decision — Mon/Tue sessions closing
+        // short go straight to broadcast just like Wed–Sat, rather than
+        // being excluded the way pre-close fill-in logic used to exclude
+        // them (Automation Logic Section 6.2's Mon/Tue exclusion applied
+        // to the old PRE-close targeted send; this is a post-close initial
+        // broadcast and applies uniformly).
+        //
+        // subsNeeded formula matches lib/sub-requests.js exactly, for
+        // consistency with the cancellation-driven broadcast path.
+        // ----------------------------------------------------------------
+        if (tentativeAvailIds.length > 0) {
+          let subsNeeded = (4 - (tentativeAvailIds.length % 4)) % 4
+          if (subsNeeded === 0) subsNeeded = 4 // safety fallback — should not occur given tentativeAvailIds.length > 0
+
+          console.log(
+            `[daily-8am] Check B Step 5.5: session ${session.id} closed short — ` +
+            `tentativeCount=${tentativeAvailIds.length} subsNeeded=${subsNeeded}. Firing initial broadcast.`
+          )
+
+          // Day-of-week label required by buildTargetingPool for the
+          // unavailable_days exclusion check.
+          const sessionDayLabel = sessionDate.toLocaleDateString('en-US', {
+            weekday: 'long',
+            timeZone: 'UTC',
+          })
+
+          const rosterSkills = players.map((p) => p.skill)
+          const sessionMatchType = session.match_type ?? 'doubles'
+          const locationName = session.locations?.name ?? 'TBD'
+
+          const { firstCallPool } = await buildTargetingPool({
+            sessionId: session.id,
+            sessionDayLabel,
+            sessionMatchType,
+            rosterSkills,
+          })
+
+          console.log(
+            `[daily-8am] Check B Step 5.5: session ${session.id} — firstCallPool size=${firstCallPool.length}`
+          )
+
+          // Insert sub_requests record. request_type = 'first_call' — this
+          // session still has 1-2 days of lead time before the deadline
+          // (6pm day prior), so First Call targeting is still appropriate
+          // here rather than going straight to all_available.
+          //
+          // KNOWN GAP (see file header): daily_10am_fillin_expansion's
+          // expectation that session_date = tomorrow no longer holds for
+          // Wed-Sat sessions broadcast from here. Flagged for follow-up.
+          const { data: subRequest, error: subInsertError } = await supabaseAdmin
+            .from('sub_requests')
+            .insert({
+              session_id: session.id,
+              sent_at: new Date().toISOString(),
+              request_type: 'first_call',
+              status: 'active',
+            })
+            .select('id')
+            .single()
+
+          if (subInsertError || !subRequest) {
+            console.error(
+              `[daily-8am] Check B Step 5.5: failed to insert sub_requests for session ${session.id}:`,
+              subInsertError?.message
+            )
+          } else {
+            console.log(
+              `[daily-8am] Check B Step 5.5: sub_requests record created id=${subRequest.id} ` +
+              `for session ${session.id}.`
+            )
+
+            if (firstCallPool.length > 0) {
+              const recipientRows = firstCallPool.map((player) => ({
+                sub_request_id: subRequest.id,
+                player_id: player.playerId,
+                sent_at: new Date().toISOString(),
+                response: 'no_response',
+              }))
+
+              const { error: recipientsError } = await supabaseAdmin
+                .from('sub_request_recipients')
+                .insert(recipientRows)
+
+              if (recipientsError) {
+                console.error(
+                  `[daily-8am] Check B Step 5.5: error inserting sub_request_recipients for session ${session.id}:`,
+                  recipientsError.message
+                )
+              } else {
+                console.log(
+                  `[daily-8am] Check B Step 5.5: ${recipientRows.length} sub_request_recipients inserted.`
+                )
+              }
+            } else {
+              console.log(
+                `[daily-8am] Check B Step 5.5: no First Call players in pool — ` +
+                `sub_requests record created but no recipients inserted.`
+              )
+            }
+
+            // Stub broadcast to organiser — real player targeting emails
+            // remain the known production blocker (unchanged by this fix).
+            if (adminEmail) {
+              const sessionDateLabelForStub = sessionDate.toLocaleDateString('en-US', {
+                weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
+              })
+              await sendSubRequestBroadcastStub({
+                adminEmail,
+                sessionDateLabel: sessionDateLabelForStub,
+                locationName,
+                openSpots: subsNeeded,
+                subRequestId: subRequest.id,
+              }).catch((err) =>
+                console.error(`[daily-8am] Check B Step 5.5: stub broadcast failed for session ${session.id}:`, err)
+              )
+            }
+
+            subRequestsFired++
+          }
+        } else {
+          console.log(
+            `[daily-8am] Check B Step 5.5: session ${session.id} closed full — no broadcast needed.`
+          )
+        }
+
+        // ----------------------------------------------------------------
         // Step 6: Build and send tiered reminder emails.
-        //
-        // Confirmed players: full session details (time, location, notes).
-        // Tentative players: status-only message with 8pm deadline.
-        //
-        // deadlineLabel for tentative emails: "tonight" if session is
-        // tomorrow, otherwise "the evening before [day name]".
         // ----------------------------------------------------------------
         const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
-        // Format session date for email subjects: "Monday, May 19"
         const sessionDateLabel = sessionDate.toLocaleDateString('en-US', {
           weekday: 'long',
           month: 'long',
@@ -562,7 +497,6 @@ export async function GET(request) {
           timeZone: 'UTC',
         })
 
-        // Format start time for confirmed reminder: "9:00 AM"
         const startTimeLabel = session.start_time
           ? new Date(`1970-01-01T${session.start_time}Z`).toLocaleTimeString('en-US', {
               hour: 'numeric',
@@ -572,33 +506,20 @@ export async function GET(request) {
             })
           : 'TBD'
 
-        // Location name from the join. Falls back to 'TBD' if not set.
         const locationName = session.locations?.name ?? 'TBD'
 
-        // Deadline label for tentative emails. Session is either tomorrow
-        // (reminder fires 1 day prior for Mon/Tue) or the day after tomorrow
-        // (reminder fires 2 days prior for Wed–Sat). In both cases the
-        // 8pm deadline is the evening before the session.
-        const sessionDayName = sessionDate.toLocaleDateString('en-US', {
-          weekday: 'long',
-          timeZone: 'UTC',
-        })
-        // Compute the day before the session for the deadline label.
         const deadlineDate = new Date(sessionDate)
         deadlineDate.setUTCDate(sessionDate.getUTCDate() - 1)
         const deadlineDayName = deadlineDate.toLocaleDateString('en-US', {
           weekday: 'long',
           timeZone: 'UTC',
         })
-        // If the deadline day is tomorrow (from today's perspective), say
-        // "tomorrow evening". Otherwise say "Monday evening" etc.
         const deadlineTomorrowStr = toMountainDateStr(tomorrowDate)
         const deadlineDateStr = toMountainDateStr(deadlineDate)
         const deadlineLabel = deadlineDateStr === deadlineTomorrowStr
           ? 'tomorrow evening'
           : `${deadlineDayName} evening`
 
-        // Build confirmed player email payloads.
         const confirmedPlayers = players
           .filter((p) => confirmedPlayerIds.has(p.availabilityId))
           .map((p) => ({
@@ -611,7 +532,6 @@ export async function GET(request) {
             cancelUrl: `${baseUrl}/portal/${p.signupToken}`,
           }))
 
-        // Build tentative player email payloads.
         const tentativePlayers = players
           .filter((p) => !confirmedPlayerIds.has(p.availabilityId))
           .map((p) => ({
@@ -622,7 +542,6 @@ export async function GET(request) {
             cancelUrl: `${baseUrl}/portal/${p.signupToken}`,
           }))
 
-        // Send confirmed reminders batch.
         if (confirmedPlayers.length > 0) {
           console.log(
             `[daily-8am] Check B: session ${session.id} — sending ${confirmedPlayers.length} confirmed reminder(s).`
@@ -634,7 +553,6 @@ export async function GET(request) {
           totalConfirmed += sent
         }
 
-        // Send tentative reminders batch.
         if (tentativePlayers.length > 0) {
           console.log(
             `[daily-8am] Check B: session ${session.id} — sending ${tentativePlayers.length} tentative reminder(s).`
@@ -648,10 +566,6 @@ export async function GET(request) {
 
         // ----------------------------------------------------------------
         // Step 7: Close the session.
-        // Set status → 'closed' and reminder_sent_at = now().
-        // This is the final write — done after all emails are dispatched
-        // so a partial email failure doesn't leave the session in an
-        // ambiguous state (reminder_sent_at set but no emails sent).
         // ----------------------------------------------------------------
         const { error: closeError } = await supabaseAdmin
           .from('sessions')
@@ -666,8 +580,6 @@ export async function GET(request) {
             `[daily-8am] Check B: CRITICAL — emails sent but failed to close session ${session.id}:`,
             closeError.message
           )
-          // Log prominently but don't crash the whole cron — other sessions
-          // should still be processed.
         } else {
           console.log(
             `[daily-8am] Check B: session ${session.id} closed. reminder_sent_at recorded.`
@@ -680,6 +592,7 @@ export async function GET(request) {
         sessionsReminded,
         confirmedRemindersSent: totalConfirmed,
         tentativeRemindersSent: totalTentative,
+        subRequestsFired,
       }
       console.log('[daily-8am] Check B complete:', JSON.stringify(outcomes.checkB))
     }
@@ -690,23 +603,10 @@ export async function GET(request) {
 
   // ==================================================================
   // CHECK C — Week close
-  //
-  // Decision tree (Phase 1 Section 4.5 Check C):
-  //   1. Query weeks WHERE status = 'sent'.
-  //   2. For each: check whether ALL child sessions have start_time < now().
-  //   3. If yes: UPDATE weeks SET status = 'closed', closed_at = now().
-  //
-  // NOTE: Check B (reminder sends) always runs before Check C. This
-  // ordering is mandatory — see Phase 2 Section 4.7 implementation notes.
-  //
-  // NOTE: The default start time check (Automation Logic Section 4.2)
-  // should fire here at week close. This is deferred — not yet built.
   // ==================================================================
   console.log('[daily-8am] Check C: starting week close check.')
 
   try {
-    // Fetch all weeks currently in 'sent' status along with their sessions.
-    // We need session start times to determine if all sessions have passed.
     const { data: sentWeeks, error: weeksError } = await supabaseAdmin
       .from('weeks')
       .select(`
@@ -729,21 +629,14 @@ export async function GET(request) {
         const sessions = week.sessions ?? []
 
         if (sessions.length === 0) {
-          // A week with no sessions should not exist in normal operation.
-          // Log and skip — do not close a week with no session data.
           console.warn(
             `[daily-8am] Check C: week ${week.id} has no sessions — skipping.`
           )
           continue
         }
 
-        // Check whether all sessions have passed their start time.
-        // A session has passed when its date + start_time is before now.
-        // session_date is 'YYYY-MM-DD' and start_time is 'HH:MM:SS'.
-        // Combine them into a full UTC datetime for comparison.
         const allPassed = sessions.every((session) => {
           if (!session.session_date || !session.start_time) {
-            // Missing date or time — treat as not yet passed to be safe.
             return false
           }
           const sessionStart = new Date(
@@ -760,7 +653,6 @@ export async function GET(request) {
           continue
         }
 
-        // All sessions have passed — close the week.
         console.log(
           `[daily-8am] Check C: week ${week.id} (${week.week_start_date}) — ` +
           `all sessions passed. Closing week.`
@@ -781,8 +673,6 @@ export async function GET(request) {
           )
         } else {
           console.log(`[daily-8am] Check C: week ${week.id} successfully closed.`)
-          // NOTE: default start time check deferred — will be added here
-          // when that feature is built.
           weeksClosed++
         }
       }

@@ -3,28 +3,53 @@
  *
  * Scheduled: derived from daily_8am base time + 2 hours.
  * Default: 10:00 MDT (16:00 UTC, "0 16 * * *" in vercel.json).
- * Applies Wed–Sat only.
+ * Applies to any session that received a first_call broadcast this
+ * morning, regardless of day of week (see fix note below).
  *
- * Fires 2 hours after Check A. If a first_call sub request was sent
- * this morning and the session is still short, expands the broadcast
- * to all available players at the required skill level.
+ * Fires 2 hours after daily-8am's Check B Step 5.5. If a first_call
+ * sub request was sent this morning and the session is still short,
+ * expands the broadcast to all available players at the required
+ * skill level.
  *
  * If the all-available pool (match-type-compatible) is empty, expands
  * further to include players regardless of match type preference.
  *
- * Decision tree (Phase 1 Section 4.6):
+ * FIX (this revision): previously filtered candidate sub_requests to
+ * sessions.session_date = tomorrow. That assumption held when the only
+ * source of first_call requests was the old daily-8am Check A, which
+ * only ever (attempted to) fire for Wed–Sat sessions dated tomorrow.
+ * Check A has since been retired — first_call requests now fire from
+ * daily-8am Check B Step 5.5 for every day of week, at reminder-send
+ * time. For Mon/Tue, reminder fires 1 day prior, so session_date really
+ * is tomorrow. For Wed–Sat, reminder fires 2 days prior, so session_date
+ * is the day AFTER tomorrow relative to this cron's run time. The old
+ * filter silently excluded every Wed–Sat expansion check.
+ *
+ * The session_date filter was never doing necessary scoping work in the
+ * first place — request_type = 'first_call' AND status = 'active' AND
+ * DATE(sent_at) = today already uniquely identifies "broadcasts fired by
+ * this morning's daily-8am run," independent of which day the underlying
+ * session falls on. That filter alone is sufficient and is now the only
+ * scoping applied. session_date is still read (needed per-session for
+ * skill-exclusion day labels and email date labels) but no longer used
+ * as a query filter.
+ *
+ * Decision tree (Phase 1 Section 4.6, as amended by this fix):
  *   1. Query sub_requests WHERE request_type = 'first_call'
- *      AND DATE(sent_at) = today AND session.day = tomorrow.
+ *      AND status = 'active' AND DATE(sent_at) = today.
  *   2. If 0 rows: no fill-in sent this morning — exit.
  *   3. For each: check if session is now full.
  *   4. If full: no action.
- *   5. If still short: build all-available targeting pool,
+ *   5. If still short: build all-available targeting pool (using this
+ *      session's own day-of-week label, not a global "tomorrow"),
  *      insert sub_requests record (request_type = 'all_available'),
  *      insert sub_request_recipients rows, send stub broadcast.
  *
  * References:
  *   Phase 1 Section 4.6 — daily_10am_fillin_expansion
  *   Automation Logic Section 6.1
+ *   See daily-8am/route.js header comment for the full Check A retirement
+ *   explanation and the known-gap note that led to this fix.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -55,17 +80,20 @@ export async function GET(request) {
   }
 
   const todayStr = toMountainDateStr(nowUtc)
-  const tomorrowDate = new Date(nowUtc)
-  tomorrowDate.setUTCDate(nowUtc.getUTCDate() + 1)
-  const tomorrowStr = toMountainDateStr(tomorrowDate)
 
-  console.log('[daily-10am-fillin-expansion] Today (MT):', todayStr, '| Tomorrow (MT):', tomorrowStr)
+  console.log('[daily-10am-fillin-expansion] Today (MT):', todayStr)
 
   const outcomes = { expansionsSent: 0, sessionsAlreadyFull: 0, noFillInThisMorning: 0 }
 
   try {
     // ------------------------------------------------------------------
-    // Step 1: Find first_call sub requests sent today for tomorrow's sessions.
+    // Step 1: Find first_call sub requests sent today, for ANY session
+    // day. No session_date filter — see file header for why that filter
+    // was removed. DATE(sent_at) = today (scoped via gte todayStart) is
+    // the only scoping needed: it identifies exactly the broadcasts this
+    // morning's daily-8am Check B Step 5.5 fired, regardless of whether
+    // the underlying session is tomorrow (Mon/Tue) or the day after
+    // tomorrow (Wed–Sat).
     // ------------------------------------------------------------------
     const todayStart = new Date(todayStr + 'T00:00:00Z').toISOString()
 
@@ -94,14 +122,11 @@ export async function GET(request) {
       return new Response(JSON.stringify({ status: 'error' }), { status: 500 })
     }
 
-    // Filter to only sessions scheduled for tomorrow.
-    const relevantRequests = (firstCallRequests ?? []).filter(
-      (r) => r.sessions?.session_date === tomorrowStr
-    )
+    const relevantRequests = firstCallRequests ?? []
 
     console.log(
       `[daily-10am-fillin-expansion] Found ${relevantRequests.length} first_call ` +
-      `request(s) for tomorrow's sessions.`
+      `request(s) sent today, across all session days.`
     )
 
     if (relevantRequests.length === 0) {
@@ -110,11 +135,6 @@ export async function GET(request) {
     }
 
     const adminEmail = await getAdminEmail()
-    const tomorrowDateObj = new Date(tomorrowStr + 'T12:00:00Z')
-    const sessionDayLabel = tomorrowDateObj.toLocaleDateString('en-US', {
-      weekday: 'long',
-      timeZone: 'UTC',
-    })
 
     for (const request of relevantRequests) {
       const session = request.sessions
@@ -124,6 +144,23 @@ export async function GET(request) {
         )
         continue
       }
+
+      // ----------------------------------------------------------------
+      // Per-session day label — derived from this session's own
+      // session_date, not a single global "tomorrow." Required for both
+      // the skill/day-exclusion targeting check and the email date label,
+      // since a single cron run may now process a mix of Mon/Tue sessions
+      // (dated tomorrow) and Wed–Sat sessions (dated the day after
+      // tomorrow) in the same pass.
+      // ----------------------------------------------------------------
+      const sessionDateObj = new Date(session.session_date + 'T12:00:00Z')
+      const sessionDayLabel = sessionDateObj.toLocaleDateString('en-US', {
+        weekday: 'long',
+        timeZone: 'UTC',
+      })
+      const sessionDateLabelForEmail = sessionDateObj.toLocaleDateString('en-US', {
+        weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
+      })
 
       // ----------------------------------------------------------------
       // Step 2: Check if session is now full.
@@ -146,7 +183,8 @@ export async function GET(request) {
       const isShort = confirmedCount % 4 !== 0
 
       console.log(
-        `[daily-10am-fillin-expansion] Session ${session.id} — confirmedCount=${confirmedCount} isShort=${isShort}`
+        `[daily-10am-fillin-expansion] Session ${session.id} (${session.session_date}) — ` +
+        `confirmedCount=${confirmedCount} isShort=${isShort}`
       )
 
       if (!isShort) {
@@ -243,9 +281,7 @@ export async function GET(request) {
       if (adminEmail) {
         await sendSubRequestBroadcastStub({
           adminEmail,
-          sessionDateLabel: tomorrowDateObj.toLocaleDateString('en-US', {
-            weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
-          }),
+          sessionDateLabel: sessionDateLabelForEmail,
           locationName,
           openSpots: 4 - (confirmedCount % 4),
           subRequestId: subRequest.id,

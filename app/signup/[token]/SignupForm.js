@@ -11,6 +11,21 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   const [savedSessionIds, setSavedSessionIds] = useState(safeInitial)
   const [error, setError] = useState(null)
 
+  // Maps session_id -> 'confirmed' | 'waitlisted', populated from the POST
+  // response's `results` array (added this revision — see /api/availability
+  // route.js header for the server-side change this depends on).
+  //
+  // KNOWN GAP: this map is only populated after a successful POST in THIS
+  // browser session. A player who was waitlisted on a prior visit and
+  // returns later (without changing their selection, so no new POST fires)
+  // will not have their waitlisted status reflected here — sessions present
+  // in the initial signedUpSessionIds prop but absent from this map fall
+  // back to 'confirmed' styling below. Fixing this properly requires the
+  // server component that supplies signedUpSessionIds to also supply each
+  // session's current status, which is outside this file. Flagging rather
+  // than silently guessing.
+  const [sessionStatuses, setSessionStatuses] = useState({})
+
   function toggleSession(sessionId) {
     setSelected(prev =>
       prev.includes(sessionId)
@@ -22,7 +37,6 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   async function handleConfirm() {
     setSaving(true)
     setError(null)
-  
 
     try {
       const toAdd = selected.filter(id => !savedSessionIds.includes(id))
@@ -30,40 +44,61 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
 
       const baseUrl = window.location.origin
 
-if (toRemove.length > 0) {
-  const res = await fetch(`${baseUrl}/api/availability`, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      playerId: player.id, 
-      sessionIds: toRemove,
-      signup_token: player.signup_token
-    })
-  })
-  if (!res.ok) {
-    const text = await res.text()
-    console.error('DELETE failed:', res.status, text)
-    throw new Error('Failed to remove sessions')
-  }
-}
+      if (toRemove.length > 0) {
+        const res = await fetch(`${baseUrl}/api/availability`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playerId: player.id,
+            sessionIds: toRemove,
+            signup_token: player.signup_token
+          })
+        })
+        if (!res.ok) {
+          const text = await res.text()
+          console.error('DELETE failed:', res.status, text)
+          throw new Error('Failed to remove sessions')
+        }
+        // Clear statuses for removed sessions — they're no longer signed up.
+        setSessionStatuses(prev => {
+          const next = { ...prev }
+          toRemove.forEach(id => delete next[id])
+          return next
+        })
+      }
 
-if (toAdd.length > 0) {
-  const res = await fetch(`${baseUrl}/api/availability`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(toAdd.map(sessionId => ({
-      session_id: sessionId,
-      player_id: player.id,
-      status: 'confirmed',
-      signup_token: player.signup_token
-    })))
-  })
-  if (!res.ok) {
-    const text = await res.text()
-    console.error('POST failed:', res.status, text)
-    throw new Error('Failed to save sessions')
-  }
-}
+      if (toAdd.length > 0) {
+        const res = await fetch(`${baseUrl}/api/availability`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(toAdd.map(sessionId => ({
+            session_id: sessionId,
+            player_id: player.id,
+            status: 'confirmed', // ignored server-side; server determines actual status
+            signup_token: player.signup_token
+          })))
+        })
+        if (!res.ok) {
+          const text = await res.text()
+          console.error('POST failed:', res.status, text)
+          throw new Error('Failed to save sessions')
+        }
+
+        const data = await res.json()
+        // data.results: [{ session_id, status }, ...] — capture the
+        // server's actual determination (confirmed vs waitlisted) per session.
+        if (Array.isArray(data.results)) {
+          setSessionStatuses(prev => {
+            const next = { ...prev }
+            data.results.forEach(r => {
+              next[r.session_id] = r.status
+            })
+            return next
+          })
+        } else {
+          console.warn('POST response missing results array — cannot determine waitlist status')
+        }
+      }
 
       setSavedSessionIds(selected)
       setConfirmed(true)
@@ -95,21 +130,41 @@ if (toAdd.length > 0) {
           <p className="text-sm text-gray-400 mb-6">You are not signed up for any days this week.</p>
         ) : (
           <div className="space-y-2 mb-6 text-left">
-            {confirmedSessions.map(session => (
-              <div key={session.id} className="bg-green-50 border border-green-200 rounded-lg px-4 py-2.5">
-                <div className="text-sm font-medium text-green-800">
-                  {new Date(session.session_date).toLocaleDateString('en-US', {
-                    weekday: 'long',
-                    month: 'long',
-                    day: 'numeric',
-                    timeZone: 'UTC'
-                  })}
+            {confirmedSessions.map(session => {
+              // Falls back to 'confirmed' if not present in sessionStatuses —
+              // see KNOWN GAP note above the state declaration.
+              const status = sessionStatuses[session.id] ?? 'confirmed'
+              const isWaitlisted = status === 'waitlisted'
+
+              return (
+                <div
+                  key={session.id}
+                  className={`rounded-lg px-4 py-2.5 border ${
+                    isWaitlisted
+                      ? 'bg-amber-50 border-amber-200'
+                      : 'bg-green-50 border-green-200'
+                  }`}
+                >
+                  <div className={`text-sm font-medium ${isWaitlisted ? 'text-amber-800' : 'text-green-800'}`}>
+                    {new Date(session.session_date).toLocaleDateString('en-US', {
+                      weekday: 'long',
+                      month: 'long',
+                      day: 'numeric',
+                      timeZone: 'UTC'
+                    })}
+                  </div>
+                  <div className={`text-xs mt-0.5 ${isWaitlisted ? 'text-amber-600' : 'text-green-600'}`}>
+                    {session.start_time ? formatTime(session.start_time) : ''} · {session.location}
+                  </div>
+                  {isWaitlisted && (
+                    <div className="text-xs mt-1.5 text-amber-700 font-medium">
+                      This session is full — you've been added to the waitlist.
+                      We'll let you know right away if a spot opens up.
+                    </div>
+                  )}
                 </div>
-                <div className="text-xs text-green-600 mt-0.5">
-                  {session.start_time ? formatTime(session.start_time) : ''} · {session.location}
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
         <button

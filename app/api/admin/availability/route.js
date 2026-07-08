@@ -8,30 +8,37 @@
  * DELETE: Remove a player from a session (organiser manual remove).
  *
  * The DELETE handler behaviour depends on session status:
- *   - Pre-close (session.status = 'open'): hard-delete the availability record.
- *     No notifications, no sub request logic. Pre-close removals are quiet
- *     and reversible — see Phase 2 Section 7.3.
+ *   - Pre-close (session.status = 'open'): hard-delete the availability
+ *     record. PRE-CLOSE WAITLIST PROMOTION (added this revision — Phase 3
+ *     of the unified dynamic waitlist build sequence): if the removed
+ *     record was 'confirmed', checks whether a waitlisted player can now be
+ *     promoted (see lib/waitlist-promotion.js). notifyOrganiser is FALSE
+ *     here — the organiser caused this removal themselves and sees the
+ *     result immediately in the admin UI, so a separate email would be
+ *     redundant noise. The promoted player IS still emailed regardless.
  *   - Post-close (session.status = 'closed'): transition availability to
  *     'cancelled' and trigger post-close cancellation logic (organiser alert
  *     + sub request evaluation). See Phase 2 Section 7.2 and Phase 3 Group 2.
+ *     Unchanged this revision.
  *
  * Distinct from /api/availability which is player-facing and requires
  * signup_token validation. Never merge these two routes.
  *
  * Tables read:  availability, sessions
- * Tables written: availability (delete or status update)
- * Side effects: post-close cancellation triggers lib/sub-requests.js
+ * Tables written: availability (delete, status update, or promotion update)
+ * Side effects: post-close cancellation triggers lib/sub-requests.js;
+ *   pre-close removal of a confirmed player triggers lib/waitlist-promotion.js
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { handlePostCloseCancellation } from '@/lib/sub-requests'
+import { promoteFromWaitlistIfOpenSpot } from '@/lib/waitlist-promotion'
 
 export async function POST(request) {
   console.log('[api/admin/availability] POST received')
   try {
     const body = await request.json()
 
-    // body is an array of availability records: [{ session_id, player_id, status }]
     if (!Array.isArray(body) || body.length === 0) {
       console.warn('[api/admin/availability] POST: invalid body — expected non-empty array')
       return Response.json({ error: 'Invalid request body' }, { status: 400 })
@@ -66,13 +73,6 @@ export async function DELETE(request) {
       return Response.json({ error: 'availabilityId required' }, { status: 400 })
     }
 
-    // ------------------------------------------------------------------
-    // Step 1: Fetch the availability record and its parent session status.
-    // We need the session status to decide between hard-delete (pre-close)
-    // and status-transition (post-close). We also fetch player and session
-    // details here so they're available for the cancellation alert without
-    // a second round-trip.
-    // ------------------------------------------------------------------
     const { data: avail, error: fetchError } = await supabaseAdmin
       .from('availability')
       .select(`
@@ -105,25 +105,13 @@ export async function DELETE(request) {
       `sessionStatus=${sessionStatus} player="${playerName}"`
     )
 
-    // ------------------------------------------------------------------
-    // Step 2: Branch on session status.
-    //
-    // Pre-close (session.status = 'open'):
-    //   Hard-delete the availability record. No notifications fire.
-    //   The player can re-sign-up before the reminder sends.
-    //
-    // Post-close (session.status = 'closed'):
-    //   Transition availability to 'cancelled'. Trigger the post-close
-    //   cancellation flow (organiser alert + sub request evaluation).
-    //
-    // Any other status (cancelled session, etc.): still hard-delete to
-    // allow the organiser to clean up rosters on cancelled sessions.
-    // ------------------------------------------------------------------
     if (sessionStatus === 'open') {
-      // Pre-close: quiet hard-delete. No downstream effects.
+      // Pre-close: hard-delete, then check for waitlist promotion.
       console.log(
         `[api/admin/availability] DELETE: session is open — hard-deleting record ${availabilityId}`
       )
+
+      const priorStatus = avail.status
 
       const { error: deleteError } = await supabaseAdmin
         .from('availability')
@@ -136,15 +124,32 @@ export async function DELETE(request) {
       }
 
       console.log(`[api/admin/availability] DELETE: hard-delete complete for record ${availabilityId}`)
+
+      // PRE-CLOSE WAITLIST PROMOTION — only when the removed player was
+      // 'confirmed'. notifyOrganiser: false — the organiser caused this
+      // themselves and sees the result immediately in the admin UI.
+      if (priorStatus === 'confirmed') {
+        try {
+          await promoteFromWaitlistIfOpenSpot({
+            sessionId: avail.session_id,
+            cancelledPlayerName: playerName,
+            notifyOrganiser: false,
+          })
+        } catch (err) {
+          console.error(
+            `[api/admin/availability] DELETE: promotion check failed for session ${avail.session_id}:`, err
+          )
+        }
+      }
+
       return Response.json({ success: true, action: 'deleted' })
 
     } else if (sessionStatus === 'closed') {
-      // Post-close: status transition + cancellation flow.
+      // Post-close: status transition + cancellation flow. Unchanged.
       console.log(
         `[api/admin/availability] DELETE: session is closed — transitioning record ${availabilityId} to cancelled`
       )
 
-      // Transition availability status to 'cancelled'.
       const { error: updateError } = await supabaseAdmin
         .from('availability')
         .update({
@@ -163,13 +168,7 @@ export async function DELETE(request) {
         `[api/admin/availability] DELETE: availability ${availabilityId} transitioned to cancelled`
       )
 
-      // Trigger post-close cancellation logic asynchronously.
-      // This fires the organiser alert and evaluates sub request logic.
-      // We do not await it — the route responds immediately and the
-      // cancellation flow runs in the background. If it fails, the
-      // availability status is already correctly set; the organiser
-      // will see the cancelled record and can act manually.
-     try {
+      try {
         await handlePostCloseCancellation({
           sessionId: avail.session_id,
           cancelledPlayerId: avail.player_id,
@@ -187,8 +186,7 @@ export async function DELETE(request) {
       return Response.json({ success: true, action: 'cancelled' })
 
     } else {
-      // Session is cancelled or in another non-actionable status.
-      // Hard-delete to allow roster cleanup without triggering sub request logic.
+      // Session cancelled or other non-actionable status. Hard-delete only.
       console.log(
         `[api/admin/availability] DELETE: session status is '${sessionStatus}' — hard-deleting record`
       )

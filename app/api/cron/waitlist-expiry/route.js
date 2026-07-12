@@ -4,48 +4,37 @@
  *
  * INFRASTRUCTURE NOTE — READ BEFORE DEPLOYING:
  * This cron needs to run on a sub-daily cadence (every 15–30 minutes) to be
- * functionally meaningful — the waitlist response window it enforces is
- * measured in hours (sub_staleness_hours, default 3), not days. Every other
- * cron in this project currently runs once daily or is manually triggered
- * via curl (Vercel Hobby tier constraint — see Project Summary Section
- * "Vercel Hobby plan cron constraint," decision still open as of this
- * writing). This route is written to be logically correct and ready to
- * schedule, but it has no way to fire unattended on the current tier. Do
- * not assume this is "live" in production until the Vercel plan decision
- * is resolved and a schedule frequent enough to matter is configured.
+ * functionally meaningful. Every other cron in this project currently runs
+ * once daily or is manually triggered via curl (Vercel Hobby tier
+ * constraint — decision to upgrade still open). This route is written to
+ * be logically correct and ready to schedule, but has no way to fire
+ * unattended on the current tier.
+ *
+ * PHASE 7 UPDATE (this revision): now passes sessionDate through to
+ * broadcastToAllAvailable, which uses it both to build a real targeting
+ * pool (previously a no-op — see lib/sub-requests.js header) and to detect
+ * whether the escalation_time threshold has passed since this cron last
+ * ran, in which case broadcastToAllAvailable applies the late-cancellation
+ * override (skill filtering suspended, request_type = 'late_cancellation')
+ * automatically. No branching logic needed in this file itself — it's all
+ * handled inside broadcastToAllAvailable.
  *
  * Decision logic:
  *   1. Query sub_requests WHERE request_type = 'waitlist' AND status =
  *      'active' AND sent_at <= now() - sub_staleness_hours.
- *      (Reuses sub_staleness_hours rather than a dedicated setting — see
- *      build discussion: a separate waitlist-window setting was considered
- *      and rejected in favor of reusing this existing, correctly
- *      hours-denominated setting, rather than reusing first_call_threshold,
- *      which is a count-of-non-responses field with an unrelated meaning.)
- *   2. For each: recompute subsNeeded fresh from current tentative count
- *      (not the value stored at broadcast time — more cancellations may
- *      have occurred during the window).
- *   3. If subsNeeded = 0: the session was already resolved by some other
- *      path (e.g. organiser manually promoted someone, which should have
- *      already closed this sub_requests row via Case D — this branch is a
- *      defensive fallback, not an expected path). Close the row and
- *      continue.
- *   4. Otherwise: close the waitlist sub_requests row (status = 'closed')
- *      and call broadcastToAllAvailable directly — bypassing
- *      evaluateAndSendSubRequest's waitlist-first check entirely, since
- *      re-running that check would just re-detect the same still-unfilled
- *      waitlisted players and re-broadcast to them instead of expanding.
+ *   2. For each: recompute subsNeeded fresh from current tentative count.
+ *   3. If subsNeeded = 0: already resolved by another path — close row.
+ *   4. Otherwise: close the waitlist sub_requests row and call
+ *      broadcastToAllAvailable directly — bypassing
+ *      evaluateAndSendSubRequest's waitlist-first check entirely.
  *
  * Tables read:  sub_requests, availability, sessions, admin_settings
  * Tables written: sub_requests (status → 'closed' on the expired waitlist
- *   row; broadcastToAllAvailable may insert a new all_available row)
+ *   row; broadcastToAllAvailable may insert a new all_available or
+ *   late_cancellation row)
  *
  * References:
- *   Original Automation Logic conversation — waitlist window discussion
- *     ("if it remains unfilled after X amount of time... it will be opened
- *     to the entire group")
- *   lib/sub-requests.js — broadcastToAllAvailable (extracted this revision
- *     specifically to support this cron)
+ *   lib/sub-requests.js — broadcastToAllAvailable
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -65,12 +54,6 @@ export async function GET(request) {
   const outcomes = { expired: 0, alreadyResolved: 0, errors: 0 }
 
   try {
-    // ------------------------------------------------------------------
-    // Step 1: Read sub_staleness_hours — the same setting used by the
-    // waitlist-first staleness check in evaluateAndSendSubRequest, reused
-    // here as the response window duration rather than introducing a
-    // separate setting (see file header and build discussion).
-    // ------------------------------------------------------------------
     const { data: settingRow } = await supabaseAdmin
       .from('admin_settings')
       .select('value')
@@ -82,9 +65,6 @@ export async function GET(request) {
 
     console.log(`[waitlist-expiry] stalenessHours=${stalenessHours}, cutoff=${cutoffIso}`)
 
-    // ------------------------------------------------------------------
-    // Step 2: Find waitlist-first broadcasts that have exceeded the window.
-    // ------------------------------------------------------------------
     const { data: expiredWaitlistRequests, error: fetchError } = await supabaseAdmin
       .from('sub_requests')
       .select(`
@@ -120,11 +100,6 @@ export async function GET(request) {
         continue
       }
 
-      // ------------------------------------------------------------------
-      // Step 3: Recompute subsNeeded fresh from current tentative count —
-      // not the value at original broadcast time, since more cancellations
-      // may have occurred during the window.
-      // ------------------------------------------------------------------
       const { data: tentativeRows, error: tentativeError } = await supabaseAdmin
         .from('availability')
         .select('id')
@@ -146,8 +121,6 @@ export async function GET(request) {
         `[waitlist-expiry] session ${session.id} — tentativeCount=${tentativeCount} subsNeeded=${subsNeeded}`
       )
 
-      // Close the expired waitlist row regardless of outcome — it's done
-      // being "the current broadcast" either way.
       const { error: closeError } = await supabaseAdmin
         .from('sub_requests')
         .update({ status: 'closed' })
@@ -158,10 +131,6 @@ export async function GET(request) {
       }
 
       if (subsNeeded === 0) {
-        // Defensive fallback — should not normally occur, since resolving
-        // to 0 tentative players via Case D should already have closed
-        // this row through closeActiveSubRequest. Logged distinctly so it's
-        // visible if it does happen.
         console.log(
           `[waitlist-expiry] session ${session.id} — subsNeeded=0 at expiry. ` +
           `Already resolved by another path. No broadcast needed.`
@@ -170,9 +139,6 @@ export async function GET(request) {
         continue
       }
 
-      // ------------------------------------------------------------------
-      // Step 4: Expand to all_available, bypassing waitlist-first entirely.
-      // ------------------------------------------------------------------
       const sessionDateLabel = session.session_date
         ? new Date(session.session_date + 'T12:00:00Z').toLocaleDateString('en-US', {
             weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
@@ -183,6 +149,9 @@ export async function GET(request) {
       await broadcastToAllAvailable({
         sessionId: session.id,
         subsNeeded,
+        sessionDate: session.session_date, // NEW — Phase 7: enables real
+        // targeting pool build and late-cancellation detection inside
+        // broadcastToAllAvailable. Previously not passed.
         sessionDateLabel,
         locationName,
         adminEmail,

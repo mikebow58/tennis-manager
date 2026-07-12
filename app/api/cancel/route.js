@@ -3,26 +3,50 @@
  *
  * Player-facing cancellation route. Called from the cancel page
  * (app/cancel/[token]/[sessionId]/page.js) when a player confirms
- * they want to cancel their spot.
+ * they want to cancel their spot. This is the route behind the
+ * "Can't make it? Cancel your spot" links embedded in reminder and
+ * confirmation emails — a separate, parallel path from /api/availability
+ * DELETE (used by SignupForm.js's toggle-and-resubmit flow).
  *
  * Behaviour depends on session status:
  *   - Pre-close (session.status = 'open'): hard-delete the availability
- *     record. No notifications, no sub request logic. Pre-close removals
- *     are quiet and reversible — Phase 2 Section 7.3.
+ *     record. No notifications, no sub request logic beyond waitlist
+ *     promotion (see below). Pre-close removals are quiet and reversible —
+ *     Phase 2 Section 7.3.
+ *
+ *     PRE-CLOSE WAITLIST PROMOTION (added this revision — closing a gap
+ *     identified after Phase 3 of the unified dynamic waitlist build
+ *     sequence): if the removed record's status was 'confirmed', checks
+ *     whether a waitlisted player can now be promoted (see
+ *     lib/waitlist-promotion.js). notifyOrganiser is TRUE here — same as
+ *     /api/availability DELETE — since a player-initiated cancellation
+ *     gives the organiser no other visibility into it. This was missed in
+ *     the original Phase 3 pass because this file was not reviewed at that
+ *     time; only /api/availability DELETE was updated, leaving the more
+ *     commonly-used email-link cancellation path without promotion logic
+ *     until now.
+ *
  *   - Post-close (session.status = 'closed'): transition availability to
  *     'cancelled' and trigger post-close cancellation logic (organiser
- *     alert + sub request evaluation) — Phase 2 Section 7.2.
+ *     alert + sub request evaluation) — Phase 2 Section 7.2. Unchanged.
  *
  * No auth session required — player identity is validated via signup_token
  * matching the player record. This is a public route.
  *
  * Tables read:  players, sessions, availability
- * Tables written: availability (delete or status update)
- * Side effects: post-close cancellation triggers lib/sub-requests.js
+ * Tables written: availability (delete, status update, or promotion update)
+ * Side effects: post-close cancellation triggers lib/sub-requests.js;
+ *   pre-close removal of a confirmed player triggers
+ *   lib/waitlist-promotion.js
+ *
+ * References:
+ *   lib/waitlist-promotion.js — promotion logic and email sends
+ *   app/api/availability/route.js — the parallel route this now matches
  */
 
 import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import { handlePostCloseCancellation } from '@/lib/sub-requests'
+import { promoteFromWaitlistIfOpenSpot } from '@/lib/waitlist-promotion'
 
 export async function POST(request) {
   const { availabilityId, playerId, sessionId, signup_token } = await request.json()
@@ -70,13 +94,30 @@ export async function POST(request) {
   // ------------------------------------------------------------------
   // Branch on session status.
   //
-  // Pre-close (status = 'open'): hard-delete. No notifications.
+  // Pre-close (status = 'open'): hard-delete + waitlist promotion check.
   // Post-close (status = 'closed'): status transition + cancellation flow.
   // Other (cancelled session etc.): hard-delete, no downstream effects.
   // ------------------------------------------------------------------
   if (session.status === 'open') {
-    // Pre-close: quiet hard-delete.
+    // Pre-close: fetch prior status first, so we know whether promotion
+    // logic applies after the delete (only relevant if the player being
+    // removed was 'confirmed' — a waitlisted player removing themselves
+    // frees no confirmed spot, per Phase 2 Section 7.5).
     console.log(`[api/cancel] Session open — hard-deleting availability ${availabilityId}`)
+
+    const { data: currentAvail, error: currentAvailError } = await supabase
+      .from('availability')
+      .select('status')
+      .eq('id', availabilityId)
+      .eq('player_id', playerId)
+      .single()
+
+    if (currentAvailError || !currentAvail) {
+      console.error('[api/cancel] Could not fetch current availability status (pre-close):', currentAvailError?.message)
+      return Response.json({ error: 'Error cancelling' }, { status: 500 })
+    }
+
+    const priorStatus = currentAvail.status
 
     const { error } = await supabase
       .from('availability')
@@ -90,15 +131,32 @@ export async function POST(request) {
     }
 
     console.log('[api/cancel] Pre-close hard-delete complete')
+
+    // PRE-CLOSE WAITLIST PROMOTION — only when the removed player was
+    // 'confirmed'. notifyOrganiser: true — player-initiated cancellation,
+    // same as /api/availability DELETE, since the organiser has no other
+    // visibility into this action.
+    if (priorStatus === 'confirmed') {
+      const playerName = `${player.first_name} ${player.last_name}`.trim()
+      try {
+        await promoteFromWaitlistIfOpenSpot({
+          sessionId,
+          cancelledPlayerName: playerName,
+          notifyOrganiser: true,
+        })
+      } catch (err) {
+        console.error(
+          `[api/cancel] Promotion check failed for session ${sessionId}:`, err
+        )
+      }
+    }
+
     return Response.json({ success: true, action: 'deleted' })
 
   } else if (session.status === 'closed') {
-    // Post-close: status transition + cancellation flow.
+    // Post-close: status transition + cancellation flow. Unchanged.
     console.log(`[api/cancel] Session closed — transitioning availability ${availabilityId} to cancelled`)
 
-    // Fetch current availability status before overwriting it.
-    // We need to know if the player was confirmed or tentative so the
-    // cancellation handler can apply the correct case (A, B, C, or D).
     const { data: currentAvail, error: currentAvailError } = await supabase
       .from('availability')
       .select('status')
@@ -126,7 +184,6 @@ export async function POST(request) {
 
     console.log(`[api/cancel] Availability ${availabilityId} transitioned to cancelled`)
 
-    // Fire post-close cancellation logic asynchronously.
     const playerName = `${player.first_name} ${player.last_name}`.trim()
     try {
       await handlePostCloseCancellation({

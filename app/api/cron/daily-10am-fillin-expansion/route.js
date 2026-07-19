@@ -43,7 +43,8 @@
  *   5. If still short: build all-available targeting pool (using this
  *      session's own day-of-week label, not a global "tomorrow"),
  *      insert sub_requests record (request_type = 'all_available'),
- *      insert sub_request_recipients rows, send stub broadcast.
+ *      insert sub_request_recipients rows, send real player broadcast
+ *      with confirm/decline link (sendSubRequestBroadcast).
  *
  * References:
  *   Phase 1 Section 4.6 — daily_10am_fillin_expansion
@@ -53,10 +54,10 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { sendSubRequestBroadcastStub } from '@/lib/email'
+import { sendSubRequestBroadcast } from '@/lib/email'
 import { resolveSkill } from '@/lib/court-balancing'
 import { buildTargetingPool } from '@/lib/targeting'
-import { getAdminEmail } from '@/lib/admin-settings'
+import { computeBroadcastDeadlineLabel } from '@/lib/sub-requests'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -134,9 +135,7 @@ export async function GET(request) {
       outcomes.noFillInThisMorning = 1
     }
 
-    const adminEmail = await getAdminEmail()
-
-    for (const request of relevantRequests) {
+   for (const request of relevantRequests) {
       const session = request.sessions
       if (!session || session.cancelled_at) {
         console.log(
@@ -276,19 +275,24 @@ export async function GET(request) {
       }
 
       // ----------------------------------------------------------------
-      // Step 6: Send stub broadcast.
+      // Step 6: Send real player broadcast with confirm/decline link.
       // ----------------------------------------------------------------
-      if (adminEmail) {
-        await sendSubRequestBroadcastStub({
-          adminEmail,
+      if (targetPool.length > 0) {
+        const broadcastDeadlineLabel = await computeBroadcastDeadlineLabel(session.session_date)
+
+        await sendSubRequestBroadcast(targetPool, {
           sessionDateLabel: sessionDateLabelForEmail,
           locationName,
-          openSpots: 4 - (confirmedCount % 4),
+          deadlineLabel: broadcastDeadlineLabel,
           subRequestId: subRequest.id,
         }).catch((err) =>
           console.error(
-            `[daily-10am-fillin-expansion] Stub broadcast failed for session ${session.id}:`, err
+            `[daily-10am-fillin-expansion] Broadcast send failed for session ${session.id}:`, err
           )
+        )
+      } else {
+        console.log(
+          `[daily-10am-fillin-expansion] Session ${session.id} — no eligible players in expanded pool, no broadcast email sent.`
         )
       }
 

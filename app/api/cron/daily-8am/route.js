@@ -53,8 +53,9 @@
  * Emails sent:
  *   - Confirmed players: sendConfirmedReminderBatch (Check B)
  *   - Tentative players: sendTentativeReminderBatch (Check B)
- *   - Organiser stub broadcast: sendSubRequestBroadcastStub (Check B, Step 5.5,
- *     only if session closed short)
+ *   - First Call players: sendSubRequestBroadcast (Check B, Step 5.5, real
+ *     player-facing confirm/decline email — only if session closed short
+ *     and the First Call pool is non-empty)
  *
  * References:
  *   Phase 1 Cron Map — Section 4.5 (Check B) and Section 4.5 (Check C)
@@ -67,11 +68,12 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import {
   sendConfirmedReminderBatch,
   sendTentativeReminderBatch,
-  sendSubRequestBroadcastStub,
+  sendSubRequestBroadcast,
 } from '@/lib/email'
 import { runProcedure1, resolveSkill, SKILL_SELF_TO_ADMIN } from '@/lib/court-balancing'
 import { buildTargetingPool } from '@/lib/targeting'
 import { getAdminEmail } from '@/lib/admin-settings'
+import { computeBroadcastDeadlineLabel } from '@/lib/sub-requests'
 
 export async function GET(request) {
   // Record entry time so execution duration is calculable from logs.
@@ -460,20 +462,29 @@ export async function GET(request) {
               )
             }
 
-            // Stub broadcast to organiser — real player targeting emails
-            // remain the known production blocker (unchanged by this fix).
-            if (adminEmail) {
-              const sessionDateLabelForStub = sessionDate.toLocaleDateString('en-US', {
+           // Real player-facing broadcast — firstCallPool entries already
+            // carry firstName/email/signupToken (buildPlayerPayload, lib/
+            // targeting.js), the exact shape sendSubRequestBroadcast expects.
+            // No adminEmail gate here — this send doesn't depend on the
+            // organiser email being configured.
+            if (firstCallPool.length > 0) {
+              const sessionDateLabelForBroadcast = sessionDate.toLocaleDateString('en-US', {
                 weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
               })
-              await sendSubRequestBroadcastStub({
-                adminEmail,
-                sessionDateLabel: sessionDateLabelForStub,
+              const broadcastDeadlineLabel = await computeBroadcastDeadlineLabel(session.session_date)
+
+              await sendSubRequestBroadcast(firstCallPool, {
+                sessionDateLabel: sessionDateLabelForBroadcast,
                 locationName,
-                openSpots: subsNeeded,
+                deadlineLabel: broadcastDeadlineLabel,
                 subRequestId: subRequest.id,
               }).catch((err) =>
-                console.error(`[daily-8am] Check B Step 5.5: stub broadcast failed for session ${session.id}:`, err)
+                console.error(`[daily-8am] Check B Step 5.5: broadcast send failed for session ${session.id}:`, err)
+              )
+            } else {
+              console.log(
+                `[daily-8am] Check B Step 5.5: no First Call players in pool for session ${session.id} — ` +
+                `no broadcast email sent (sub_requests record created with zero recipients).`
               )
             }
 

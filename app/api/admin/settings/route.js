@@ -2,13 +2,21 @@
 //
 // GET  /api/admin/settings — returns current values for all organiser-
 //      configurable settings: admin email, default session start time,
-//      and per-location court counts. Used to populate the settings page.
+//      and full location records (name, address, total_courts, notes, active).
+//      Used to populate the settings page.
 //
 // PUT  /api/admin/settings — accepts a partial payload and updates only
 //      the fields present. Three independent settings, three different
 //      underlying tables (admin_settings, default_sessions, locations),
 //      but exposed as a single endpoint since the settings page edits
-//      them together.
+//      them together. Location edits here are for EXISTING locations only
+//      (including deactivate/reactivate via the `active` field) — creating
+//      a brand new location is a separate POST (below).
+//
+// POST /api/admin/settings — creates a new location. Kept on this same route
+//      file rather than a new /api/admin/locations route, since this file is
+//      already the "organiser settings" endpoint and location creation is a
+//      rare, organiser-only action with no other reasonable home.
 //
 // Auth: this route is NOT added to isPublicRoute in lib/supabase-middleware.js,
 // so it is protected by middleware.js by default — only a logged-in organiser
@@ -18,15 +26,16 @@
 // Tables touched (all via lib/admin-settings.js):
 //   admin_settings   — admin_email key
 //   default_sessions — start_time, written to all active rows together
-//   locations        — total_courts, written per-location
+//   locations        — name, address, total_courts, notes, active
 
 import {
   getAdminEmail,
   setAdminEmail,
   getDefaultStartTime,
   setDefaultStartTime,
-  getLocationsWithCourts,
-  setLocationCourts,
+  getLocations,
+  createLocation,
+  updateLocation,
 } from '@/lib/admin-settings'
 
 /**
@@ -47,7 +56,7 @@ export async function GET() {
     const [adminEmail, defaultStartTime, locations] = await Promise.all([
       getAdminEmail(),
       getDefaultStartTime(),
-      getLocationsWithCourts(),
+      getLocations(),
     ])
 
     console.log(
@@ -79,7 +88,14 @@ export async function GET() {
  * {
  *   adminEmail?: string,
  *   defaultStartTime?: string,        // e.g. "09:00:00"
- *   locations?: Array<{ id: string, totalCourts: number }>
+ *   locations?: Array<{
+ *     id: string,
+ *     name?: string,
+ *     address?: string|null,
+ *     totalCourts?: number,
+ *     notes?: string|null,
+ *     active?: boolean
+ *   }>
  * }
  *
  * @returns {Promise<Response>} 200 with per-field success flags on success,
@@ -142,9 +158,11 @@ export async function PUT(request) {
   }
 
   // ------------------------------------------------------------------
-  // Locations — array of { id, totalCourts }, written one at a time.
+  // Locations — array of partial location updates, written one at a time.
   // Batched in a single request from the UI, but each location is an
   // independent row update — one failure doesn't block the others.
+  // This handles routine edits (name, address, total_courts, notes) AND
+  // deactivate/reactivate (active: false / true) via the same payload shape.
   // ------------------------------------------------------------------
   if (locations !== undefined) {
     if (!Array.isArray(locations)) {
@@ -155,13 +173,21 @@ export async function PUT(request) {
 
       const locationResults = await Promise.all(
         locations.map(async (loc) => {
-          if (!loc.id || typeof loc.totalCourts !== 'number' || loc.totalCourts < 0) {
-            console.warn(`[admin/settings] PUT — skipping invalid location entry:`, loc)
-            return { id: loc.id ?? null, success: false, error: 'Invalid location id or totalCourts' }
+          if (!loc.id) {
+            console.warn('[admin/settings] PUT — skipping location entry with no id:', loc)
+            return { id: null, success: false, error: 'Missing location id' }
           }
-          const success = await setLocationCourts(loc.id, loc.totalCourts)
+          // updateLocation does its own field-level validation and only
+          // writes fields present in the object — pass through as-is.
+          const success = await updateLocation(loc.id, {
+            name: loc.name,
+            address: loc.address,
+            totalCourts: loc.totalCourts,
+            notes: loc.notes,
+            active: loc.active,
+          })
           if (!success) {
-            console.error(`[admin/settings] PUT — setLocationCourts failed for location ${loc.id}`)
+            console.error(`[admin/settings] PUT — updateLocation failed for location ${loc.id}`)
           }
           return { id: loc.id, success }
         })
@@ -175,4 +201,48 @@ export async function PUT(request) {
   console.log('[admin/settings] PUT — complete:', JSON.stringify(results))
 
   return Response.json({ results })
+}
+
+/**
+ * POST /api/admin/settings
+ *
+ * Creates a new location. This is the only creation action on this route —
+ * everything else is a read (GET) or an edit to something that already
+ * exists (PUT). Kept separate from PUT rather than overloading it, since
+ * "create" and "update many" are different enough operations to warrant
+ * their own handler.
+ *
+ * Expected body shape:
+ * {
+ *   name: string,
+ *   address?: string,
+ *   totalCourts: number,
+ *   notes?: string
+ * }
+ *
+ * @returns {Promise<Response>} 201 with the new location on success,
+ *   400 if required fields are missing/invalid, 500 on database error.
+ */
+export async function POST(request) {
+  console.log('[admin/settings] POST — received create-location request')
+
+  let body
+  try {
+    body = await request.json()
+  } catch {
+    console.error('[admin/settings] POST — failed to parse request body')
+    return Response.json({ error: 'Invalid request body' }, { status: 400 })
+  }
+
+  const { name, address, totalCourts, notes } = body
+
+  const result = await createLocation({ name, address, totalCourts, notes })
+
+  if (!result.success) {
+    console.warn('[admin/settings] POST — createLocation rejected:', result.error)
+    return Response.json({ error: result.error }, { status: 400 })
+  }
+
+  console.log(`[admin/settings] POST — created location ${result.location.id}`)
+  return Response.json({ location: result.location }, { status: 201 })
 }

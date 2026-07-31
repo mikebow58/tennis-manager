@@ -12,14 +12,13 @@
  *   organiser principle, pre-close admin adds are intentionally not routed
  *   through waitlist logic the way player self-signups are (Phase 2).
  *
- *   POST-CLOSE (session.status = 'closed') — NEW this revision, Phase 6 of
- *   the unified dynamic waitlist build sequence. This is the organiser-add
- *   equivalent of "a late respondent filling an open sub-request spot,"
- *   built now because the actual player-facing confirm/decline broadcast
- *   mechanism doesn't exist yet (deferred at Phase 4) and manual add via
- *   this route is currently the ONLY real path by which a post-close spot
- *   ever gets filled. Recomputes tentative count fresh from the DB (not
- *   any client-supplied value) and branches three ways:
+ *   POST-CLOSE (session.status = 'closed'): Phase 6 of the unified dynamic
+ *   waitlist build sequence. This is the organiser-add equivalent of "a
+ *   late respondent filling an open sub-request spot," built because the
+ *   actual player-facing confirm/decline broadcast mechanism didn't exist
+ *   yet at the time (since built — see lib/sub-requests.js). Recomputes
+ *   tentative count fresh from the DB (not any client-supplied value) and
+ *   branches three ways:
  *
  *     1. tentativeCount === 0 (session already fully resolved — no
  *        incomplete court exists): new player inserted as 'waitlisted',
@@ -55,34 +54,74 @@
  *   tentativeCount === 0 itself, which is the distinct "already resolved"
  *   case handled separately above.
  *
+ *   ALL insert branches above now also set availability.organiser_added =
+ *   true (NEW this revision — see DELETE section below for why this
+ *   matters). Every insert through this route is, by definition, an
+ *   organiser manual add — this route is never reachable from a player's
+ *   own signup action (that's /api/availability, a separate route with
+ *   signup_token validation) — so every insert here qualifies unconditionally.
+ *
  * DELETE: Remove a player from a session (organiser manual remove).
- *   Unchanged from Phase 3 — pre-close removal triggers
- *   promoteFromWaitlistIfOpenSpot; post-close removal triggers
- *   handlePostCloseCancellation.
+ *   POST-CLOSE: unchanged — transitions to 'cancelled' and triggers
+ *   handlePostCloseCancellation, same as always.
+ *
+ *   PRE-CLOSE (session.status = 'open') — NEW this revision. Per Phase 2
+ *   Section 7.3, a pre-close removal is normally a quiet, silent hard-delete
+ *   with no organiser notification — by design, since most pre-close
+ *   removals are just players changing their own mind and the organiser
+ *   doesn't need to know about ordinary roster churn.
+ *
+ *   The exception: if the record being removed has organiser_added = true
+ *   (the organiser personally recruited and added this player), and the
+ *   PLAYER is the one removing themselves afterward, the organiser has a
+ *   real interest in knowing — they went out of their way to get this
+ *   person on the roster, and silently losing that effort without any
+ *   signal is the gap this closes (Project Summary Section 21, "Organiser-
+ *   added player removal notification").
+ *
+ *   The hard-delete itself is unchanged in either case — this only adds an
+ *   email alongside it when organiser_added is true. Post-close removals of
+ *   an organiser-added player are NOT specially handled here; standard
+ *   cancellation procedures already apply post-close regardless of how the
+ *   player originally joined the roster, per the original spec ("Standard
+ *   cancellation procedures apply post-close; this covers the pre-close
+ *   gap only").
  *
  * Distinct from /api/availability which is player-facing and requires
  * signup_token validation. Never merge these two routes.
  *
  * Tables read:  availability, sessions, sub_requests
- * Tables written: availability (insert, delete, status update, or
- *   promotion update), sub_requests (closure on full resolution)
+ * Tables written: availability (insert incl. organiser_added, delete,
+ *   status update, or promotion update), sub_requests (closure on full
+ *   resolution)
  * Side effects: post-close cancellation triggers lib/sub-requests.js;
  *   pre-close removal of a confirmed player triggers
- *   lib/waitlist-promotion.js; post-close manual add resolving an
- *   incomplete court triggers the same promotion emails as Case D.
+ *   lib/waitlist-promotion.js; pre-close removal of an organiser-added
+ *   player additionally triggers an immediate organiser email (NEW); post-
+ *   close manual add resolving an incomplete court triggers the same
+ *   promotion emails as Case D.
  *
  * References:
  *   Phase 3 Group 3 — sub request outcomes → availability records
  *     (first eligible respondent confirms; late respondent waitlisted)
+ *   Phase 2 Section 7.3 — pre-close removal is quiet and reversible (the
+ *     general rule this route's DELETE handler follows, except for the
+ *     organiser_added case carved out above)
  *   Phase 2 Section 7.4 — organiser override race-condition ALERT pattern
  *   lib/sub-requests.js — Case D (mirrored logic for full-resolution
  *     promotion + sub_requests closure)
+ *   Project Summary Section 21 — "Organiser-added player removal
+ *     notification" (the feature this revision implements)
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { handlePostCloseCancellation } from '@/lib/sub-requests'
 import { promoteFromWaitlistIfOpenSpot } from '@/lib/waitlist-promotion'
-import { sendTentativePromotedToConfirmed, sendAdminAddRaceAlert } from '@/lib/email'
+import {
+  sendTentativePromotedToConfirmed,
+  sendAdminAddRaceAlert,
+  sendOrganiserAddedPlayerRemovedAlert,
+} from '@/lib/email'
 import { getAdminEmail } from '@/lib/admin-settings'
 
 export async function POST(request) {
@@ -125,10 +164,11 @@ export async function POST(request) {
         // Pre-close (or any other status): unchanged behaviour — simple
         // insert, trusting the admin UI's supplied status. No capacity
         // check, per the system-never-blocks-the-organiser principle and
-        // Phase 2 Section 5.6.
+        // Phase 2 Section 5.6. organiser_added: true set unconditionally —
+        // every insert through this route is an organiser manual add.
         const { error: insertError } = await supabaseAdmin
           .from('availability')
-          .insert({ session_id, player_id, status: clientStatus ?? 'confirmed' })
+          .insert({ session_id, player_id, status: clientStatus ?? 'confirmed', organiser_added: true })
 
         if (insertError) {
           console.error(
@@ -143,7 +183,7 @@ export async function POST(request) {
       }
 
       // ------------------------------------------------------------------
-      // POST-CLOSE — Phase 6 capacity-aware branching.
+      // POST-CLOSE — capacity-aware branching.
       // ------------------------------------------------------------------
       const { data: tentativeRows, error: tentativeFetchError } = await supabaseAdmin
         .from('availability')
@@ -179,7 +219,7 @@ export async function POST(request) {
 
         const { error: insertError } = await supabaseAdmin
           .from('availability')
-          .insert({ session_id, player_id, status: 'waitlisted' })
+          .insert({ session_id, player_id, status: 'waitlisted', organiser_added: true })
 
         if (insertError) {
           console.error(
@@ -247,7 +287,13 @@ export async function POST(request) {
 
         const { error: insertError } = await supabaseAdmin
           .from('availability')
-          .insert({ session_id, player_id, status: 'confirmed', court_assignment_status: 'confirmed' })
+          .insert({
+            session_id,
+            player_id,
+            status: 'confirmed',
+            court_assignment_status: 'confirmed',
+            organiser_added: true,
+          })
 
         if (insertError) {
           console.error(
@@ -334,7 +380,13 @@ export async function POST(request) {
 
       const { error: insertError } = await supabaseAdmin
         .from('availability')
-        .insert({ session_id, player_id, status: 'tentative', court_assignment_status: 'tentative' })
+        .insert({
+          session_id,
+          player_id,
+          status: 'tentative',
+          court_assignment_status: 'tentative',
+          organiser_added: true,
+        })
 
       if (insertError) {
         console.error(
@@ -366,6 +418,8 @@ export async function DELETE(request) {
       return Response.json({ error: 'availabilityId required' }, { status: 400 })
     }
 
+    // organiser_added now included in this select — required to decide
+    // whether the pre-close branch below needs to fire the new alert.
     const { data: avail, error: fetchError } = await supabaseAdmin
       .from('availability')
       .select(`
@@ -373,6 +427,7 @@ export async function DELETE(request) {
         status,
         player_id,
         session_id,
+        organiser_added,
         players ( first_name, last_name, email ),
         sessions (
           id,
@@ -395,7 +450,7 @@ export async function DELETE(request) {
     const playerName = `${avail.players?.first_name} ${avail.players?.last_name}`.trim()
     console.log(
       `[api/admin/availability] DELETE: availabilityId=${availabilityId} ` +
-      `sessionStatus=${sessionStatus} player="${playerName}"`
+      `sessionStatus=${sessionStatus} player="${playerName}" organiserAdded=${avail.organiser_added}`
     )
 
     if (sessionStatus === 'open') {
@@ -404,6 +459,7 @@ export async function DELETE(request) {
       )
 
       const priorStatus = avail.status
+      const wasOrganiserAdded = avail.organiser_added === true
 
       const { error: deleteError } = await supabaseAdmin
         .from('availability')
@@ -427,6 +483,46 @@ export async function DELETE(request) {
         } catch (err) {
           console.error(
             `[api/admin/availability] DELETE: promotion check failed for session ${avail.session_id}:`, err
+          )
+        }
+      }
+
+      // ------------------------------------------------------------------
+      // NEW: organiser-added player removal notification.
+      // The delete above is unchanged either way — this only adds an email
+      // alongside it when the record being removed was originally added by
+      // the organiser (organiser_added = true). Normal pre-close removals
+      // (organiser_added = false) remain silent per Phase 2 Section 7.3.
+      // ------------------------------------------------------------------
+      if (wasOrganiserAdded) {
+        console.log(
+          `[api/admin/availability] DELETE: record ${availabilityId} was organiser-added — ` +
+          `firing immediate organiser alert.`
+        )
+
+        const sessionDateLabel = avail.sessions?.session_date
+          ? new Date(avail.sessions.session_date + 'T12:00:00Z').toLocaleDateString('en-US', {
+              weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
+            })
+          : 'Unknown date'
+        const locationName = avail.sessions?.locations?.name ?? 'TBD'
+
+        const adminEmail = await getAdminEmail()
+        if (adminEmail) {
+          await sendOrganiserAddedPlayerRemovedAlert({
+            adminEmail,
+            playerName,
+            sessionDateLabel,
+            locationName,
+          }).catch((err) =>
+            console.error(
+              '[api/admin/availability] DELETE: organiser-added removal alert email failed:', err
+            )
+          )
+        } else {
+          console.error(
+            '[api/admin/availability] DELETE: getAdminEmail() returned no value — ' +
+            'organiser-added removal alert skipped.'
           )
         }
       }
@@ -456,6 +552,9 @@ export async function DELETE(request) {
         `[api/admin/availability] DELETE: availability ${availabilityId} transitioned to cancelled`
       )
 
+      // Standard cancellation procedures apply post-close regardless of
+      // organiser_added — per spec, this feature covers the pre-close gap
+      // only. No special branching here.
       try {
         await handlePostCloseCancellation({
           sessionId: avail.session_id,

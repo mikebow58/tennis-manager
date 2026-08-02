@@ -5,7 +5,9 @@
  * Receives server-fetched session and locations as props.
  * Saves changes via PATCH /api/sessions/[sessionId].
  *
- * Fields: start_time, location_id, courts_available, format, notes.
+ * Fields: start_time, location_id, courts_available, format, notes,
+ * organiser_notes (NEW this revision — internal-only note, never shown to
+ * players; distinct from `notes`, which IS included in the reminder email).
  * Date and status are intentionally not editable here.
  */
 
@@ -27,6 +29,7 @@ export default function EditSessionClient({ session, locations, sessionDateLabel
   const [courtsAvailable, setCourtsAvailable] = useState(session.courts_available ?? '')
   const [format, setFormat] = useState(session.format || 'switch_partners')
   const [notes, setNotes] = useState(session.notes || '')
+  const [organizerNotes, setOrganizerNotes] = useState(session.organiser_notes || '')
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -41,6 +44,7 @@ export default function EditSessionClient({ session, locations, sessionDateLabel
         courts_available: parseInt(courtsAvailable, 10) || null,
         format: format || null,
         notes: notes.trim() || null,
+        organiser_notes: organizerNotes.trim() || null,
       }),
     })
 
@@ -158,7 +162,7 @@ export default function EditSessionClient({ session, locations, sessionDateLabel
               </select>
             </div>
 
-            {/* Notes */}
+            {/* Note to players — player-facing, included in reminder email */}
             <div>
               <label className="block text-sm text-gray-600 mb-1">
                 Note to players{' '}
@@ -169,6 +173,23 @@ export default function EditSessionClient({ session, locations, sessionDateLabel
                 onChange={(e) => setNotes(e.target.value)}
                 rows={2}
                 placeholder="e.g. Meet at court 3 entrance"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {/* Organizer note — internal only, NEW this revision. Distinct
+                from the field above: never sent to players, shown only on
+                the admin dashboard day card and this edit screen. */}
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">
+                Organizer note{' '}
+                <span className="font-normal text-gray-400">(internal only — not shown to players)</span>
+              </label>
+              <textarea
+                value={organizerNotes}
+                onChange={(e) => setOrganizerNotes(e.target.value)}
+                rows={2}
+                placeholder="e.g. Remember to bring extra balls"
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>

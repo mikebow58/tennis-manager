@@ -67,6 +67,8 @@ export default async function Dashboard({ searchParams }) {
   if (week) {
     // V2: join locations so we have the location name for display.
     // courts_available replaces court_count.
+    // organiser_notes is included via select('*') below — internal-only
+    // note, rendered on the day card but never sent to players.
     const { data } = await supabase
       .from('sessions')
       .select('*, locations(name)')
@@ -220,6 +222,11 @@ export default async function Dashboard({ searchParams }) {
 
                 const spotsNeeded = isFull ? 0 : (Math.ceil(count / 4) * 4) - count
 
+                // Organizer-only note (organiser_notes column) — internal
+                // context for the organizer, never sent to players. Shown
+                // on both the completed and active day card variants below.
+                const organizerNote = session.organiser_notes?.trim() || null
+
                 if (completed) {
                   return (
                     <div
@@ -230,6 +237,11 @@ export default async function Dashboard({ searchParams }) {
                       <div className="text-xs text-gray-400 mb-3">
                         {formatTime(session.start_time)} · {locationName}
                       </div>
+                      {organizerNote && (
+                        <div className="text-xs text-gray-400 italic mb-3 border-t border-gray-200 pt-2">
+                          {organizerNote}
+                        </div>
+                      )}
                       <div className="flex justify-between items-center">
                         <span className="text-xs text-gray-400">
                           {count} player{count !== 1 ? 's' : ''}
@@ -266,6 +278,11 @@ export default async function Dashboard({ searchParams }) {
                     <div className="text-xs text-gray-400 mb-3">
                       {formatTime(session.start_time)} · {locationName}
                     </div>
+                    {organizerNote && (
+                      <div className="text-xs text-gray-500 italic mb-3 border-t border-gray-100 pt-2">
+                        {organizerNote}
+                      </div>
+                    )}
                     <div className="flex justify-between items-center">
                       <span className="text-xs text-gray-400">
                         {isEmpty

@@ -2,12 +2,19 @@
  * ApproveWeekClient
  *
  * Client component: renders one session row on the approve page.
- * When isEditable is true (week is in pending_approval), the organiser
- * can expand the row to edit start_time, courts_available, location, and notes.
+ * When isEditable is true (week is in pending_approval), the organizer
+ * can expand the row to edit start_time, courts_available, location, notes,
+ * and organizer_notes (NEW this revision — internal-only note, never shown
+ * to players; distinct from `notes`, which IS included in the reminder
+ * email).
  * Edits are saved immediately via PATCH /api/sessions/[sessionId].
  *
  * When isEditable is false (week already approved/sent/closed), the row
  * is read-only — no expand affordance shown.
+ *
+ * NOTE (this revision): removed two leftover debug console.log statements
+ * ([location debug] and the locationId-at-save log) that were left in from
+ * an earlier debugging pass — harmless but noisy in production logs.
  *
  * @param {object}   props
  * @param {object}   props.session    - Session record from DB (includes locations: { name } join)
@@ -31,17 +38,17 @@ export default function ApproveWeekClient({ session, dateLabel, isEditable, week
   const [startTime, setStartTime] = useState(session.start_time || '')
   const [courtsAvailable, setCourtsAvailable] = useState(session.courts_available ?? '')
   const [notes, setNotes] = useState(session.notes || '')
+  const [organizerNotes, setOrganizerNotes] = useState(session.organiser_notes || '')
 
   // Location state — track the selected location_id so the subtitle stays live
   // after a save without needing a page reload or re-fetch
 const [locationId, setLocationId] = useState(session.location_id ? String(session.location_id) : '')
 
   // Derive the display name from the current locationId against the locations list.
-  // This updates immediately when the organiser changes the dropdown selection,
+  // This updates immediately when the organizer changes the dropdown selection,
   // and remains correct after a save because locationId is in state.
  const locationName =
     locations?.find((loc) => String(loc.id) === String(locationId))?.name ?? session.locations?.name ?? '—'
-    console.log('[location debug]', { locationId, locationName, locationsCount: locations?.length, firstLocId: locations?.[0]?.id })
 
   // Two-tap delete confirmation state
   const [deleteStage, setDeleteStage] = useState('idle') // 'idle' | 'confirm'
@@ -56,8 +63,7 @@ const [locationId, setLocationId] = useState(session.location_id ? String(sessio
    * Includes location_id so the location is persisted correctly.
    */
   async function handleSave() {
-    console.log('[ApproveWeekClient] locationId at save:', locationId, 'locations prop:', locations)
-setSaving(true)
+    setSaving(true)
     setSaveResult(null)
 
     try {
@@ -68,13 +74,14 @@ setSaving(true)
           start_time: startTime,
           courts_available: parseInt(courtsAvailable, 10) || null,
           notes: notes.trim() || null,
+          organiser_notes: organizerNotes.trim() || null,
           location_id: locationId || null,
         }),
       })
 
       if (res.ok) {
         setSaveResult('saved')
-        // Collapse the edit form after a short delay so the organiser
+        // Collapse the edit form after a short delay so the organizer
         // can see the confirmation before the row returns to summary view
         setTimeout(() => {
           setExpanded(false)
@@ -219,6 +226,23 @@ setSaving(true)
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
               placeholder="e.g. Meet at court 3 entrance"
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          {/* Organizer note — internal only, NEW this revision. Distinct
+              from the field above: never sent to players, shown only on
+              the admin dashboard day card and the session edit screen. */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Organizer note{' '}
+              <span className="font-normal text-gray-400">(internal only — not shown to players)</span>
+            </label>
+            <textarea
+              value={organizerNotes}
+              onChange={(e) => setOrganizerNotes(e.target.value)}
+              rows={2}
+              placeholder="e.g. Remember to bring extra balls"
               className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>

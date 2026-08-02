@@ -4,6 +4,11 @@
  * Client component for the new session form.
  * V2 field names: courts_available (replaces court_count),
  * location_id FK (replaces freeform location text).
+ *
+ * organiser_notes added this revision — internal-only note, never shown to
+ * players; distinct from `notes`, which IS included in the reminder email.
+ * Brings this form in line with EditSessionClient.js and ApproveWeekClient.js,
+ * which already had this field.
  */
 
 'use client'
@@ -24,6 +29,7 @@ export default function NewSessionClient({ weekId, locations }) {
     courts_available: 2,
     format: 'switch_partners',
     notes: '',
+    organizer_notes: '',
   })
 
   function handleChange(e) {
@@ -46,6 +52,7 @@ export default function NewSessionClient({ weekId, locations }) {
         courts_available: Number(form.courts_available),
         format: form.format,
         notes: form.notes.trim() || null,
+        organiser_notes: form.organizer_notes.trim() || null,
         status: 'open',
       }),
     })
@@ -157,7 +164,7 @@ export default function NewSessionClient({ weekId, locations }) {
               />
             </div>
 
-            {/* Notes */}
+            {/* Note to players — player-facing, included in reminder email */}
             <div>
               <label className="block text-sm text-gray-600 mb-1">
                 Note to players{' '}
@@ -169,6 +176,24 @@ export default function NewSessionClient({ weekId, locations }) {
                 onChange={handleChange}
                 rows={2}
                 placeholder="e.g. Arrive 10 min early · Bring a can of balls"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {/* Organizer note — internal only. Distinct from the field
+                above: never sent to players, shown only on the admin
+                dashboard day card and the session edit screen. */}
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">
+                Organizer note{' '}
+                <span className="font-normal text-gray-400">(internal only — not shown to players)</span>
+              </label>
+              <textarea
+                name="organizer_notes"
+                value={form.organizer_notes}
+                onChange={handleChange}
+                rows={2}
+                placeholder="e.g. Remember to bring extra balls"
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>

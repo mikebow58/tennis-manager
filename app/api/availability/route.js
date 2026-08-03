@@ -9,6 +9,14 @@
  *   status based on getSessionRosterCondition; client-supplied status is
  *   ignored.
  *
+ *   CANCELLED SESSION GUARD (NEW this revision): before roster condition
+ *   checks run, every targeted session is checked for cancelled_at. If any
+ *   session in the request has been cancelled, the entire request is
+ *   rejected with a 400 — a player should never be able to sign up for a
+ *   session the organiser has cancelled via the new session cancellation
+ *   flow (app/api/sessions/[sessionId]/cancel). This closes the gap that
+ *   made "closed to new signups" not actually true for cancelled sessions.
+ *
  * DELETE: Player removes themselves from a session.
  *   PRE-CLOSE WAITLIST PROMOTION (added this revision — Phase 3 of the
  *   unified dynamic waitlist build sequence): if the removed record's status
@@ -68,6 +76,35 @@ export async function POST(request) {
   if (!valid) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const sessionIds = body.map((item) => item.session_id)
+
+  // ------------------------------------------------------------------
+  // NEW: reject the entire request if any targeted session has been
+  // cancelled. Checked before roster condition logic runs — a cancelled
+  // session's roster condition is irrelevant if signup isn't allowed at all.
+  // ------------------------------------------------------------------
+  const { data: sessionRows, error: sessionFetchError } = await supabaseAdmin
+    .from('sessions')
+    .select('id, cancelled_at')
+    .in('id', sessionIds)
+
+  if (sessionFetchError) {
+    console.error('[api/availability] POST: error checking session status:', sessionFetchError.message)
+    return Response.json({ error: 'Error checking session status' }, { status: 500 })
+  }
+
+  const cancelledSessionIds = (sessionRows ?? [])
+    .filter((s) => s.cancelled_at)
+    .map((s) => s.id)
+
+  if (cancelledSessionIds.length > 0) {
+    console.warn(
+      `[api/availability] POST: rejected signup — cancelled session(s) in request: ${cancelledSessionIds.join(', ')}`
+    )
+    return Response.json(
+      { error: 'One or more selected sessions have been cancelled and are closed to signups' },
+      { status: 400 }
+    )
+  }
 
   let rosterConditions
   try {

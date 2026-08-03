@@ -5,6 +5,12 @@
  * requires an authenticated session. No signup_token validation.
  *
  * POST: Add a player to a session (organiser manual add).
+ *   CANCELLED SESSION GUARD (NEW this revision): rejects the add outright
+ *   if the target session has been cancelled (sessions.cancelled_at IS NOT
+ *   NULL). Without this, an organiser could still manually add a player to
+ *   a session that's supposedly closed — the same gap that was fixed on
+ *   the player-facing /api/availability route in this same revision.
+ *
  *   PRE-CLOSE (session.status = 'open'): unchanged from before this
  *   revision — simple insert, no capacity check. Per Phase 2 Section 5.6
  *   ("Full uses >= rather than = ... organiser manual adds can push
@@ -14,11 +20,9 @@
  *
  *   POST-CLOSE (session.status = 'closed'): Phase 6 of the unified dynamic
  *   waitlist build sequence. This is the organiser-add equivalent of "a
- *   late respondent filling an open sub-request spot," built because the
- *   actual player-facing confirm/decline broadcast mechanism didn't exist
- *   yet at the time (since built — see lib/sub-requests.js). Recomputes
- *   tentative count fresh from the DB (not any client-supplied value) and
- *   branches three ways:
+ *   late respondent filling an open sub-request spot." Recomputes tentative
+ *   count fresh from the DB (not any client-supplied value) and branches
+ *   three ways:
  *
  *     1. tentativeCount === 0 (session already fully resolved — no
  *        incomplete court exists): new player inserted as 'waitlisted',
@@ -54,38 +58,25 @@
  *   tentativeCount === 0 itself, which is the distinct "already resolved"
  *   case handled separately above.
  *
- *   ALL insert branches above now also set availability.organiser_added =
- *   true (NEW this revision — see DELETE section below for why this
- *   matters). Every insert through this route is, by definition, an
- *   organiser manual add — this route is never reachable from a player's
- *   own signup action (that's /api/availability, a separate route with
- *   signup_token validation) — so every insert here qualifies unconditionally.
+ *   ALL insert branches also set availability.organiser_added = true.
+ *   Every insert through this route is, by definition, an organiser manual
+ *   add — this route is never reachable from a player's own signup action
+ *   (that's /api/availability, a separate route with signup_token
+ *   validation) — so every insert here qualifies unconditionally.
  *
  * DELETE: Remove a player from a session (organiser manual remove).
  *   POST-CLOSE: unchanged — transitions to 'cancelled' and triggers
  *   handlePostCloseCancellation, same as always.
  *
- *   PRE-CLOSE (session.status = 'open') — NEW this revision. Per Phase 2
- *   Section 7.3, a pre-close removal is normally a quiet, silent hard-delete
- *   with no organiser notification — by design, since most pre-close
- *   removals are just players changing their own mind and the organiser
- *   doesn't need to know about ordinary roster churn.
- *
- *   The exception: if the record being removed has organiser_added = true
- *   (the organiser personally recruited and added this player), and the
- *   PLAYER is the one removing themselves afterward, the organiser has a
- *   real interest in knowing — they went out of their way to get this
- *   person on the roster, and silently losing that effort without any
- *   signal is the gap this closes (Project Summary Section 21, "Organiser-
- *   added player removal notification").
- *
- *   The hard-delete itself is unchanged in either case — this only adds an
- *   email alongside it when organiser_added is true. Post-close removals of
- *   an organiser-added player are NOT specially handled here; standard
- *   cancellation procedures already apply post-close regardless of how the
- *   player originally joined the roster, per the original spec ("Standard
- *   cancellation procedures apply post-close; this covers the pre-close
- *   gap only").
+ *   PRE-CLOSE (session.status = 'open'): a pre-close removal is normally a
+ *   quiet, silent hard-delete with no organiser notification (Phase 2
+ *   Section 7.3). The exception: if the record being removed has
+ *   organiser_added = true (the organiser personally recruited and added
+ *   this player), and the PLAYER is the one removing themselves afterward,
+ *   an immediate email fires instead of staying silent (Project Summary
+ *   Section 21, "Organiser-added player removal notification"). The
+ *   hard-delete itself is unchanged either way — this only adds an email
+ *   alongside it when organiser_added is true.
  *
  * Distinct from /api/availability which is player-facing and requires
  * signup_token validation. Never merge these two routes.
@@ -97,9 +88,9 @@
  * Side effects: post-close cancellation triggers lib/sub-requests.js;
  *   pre-close removal of a confirmed player triggers
  *   lib/waitlist-promotion.js; pre-close removal of an organiser-added
- *   player additionally triggers an immediate organiser email (NEW); post-
- *   close manual add resolving an incomplete court triggers the same
- *   promotion emails as Case D.
+ *   player additionally triggers an immediate organiser email; post-close
+ *   manual add resolving an incomplete court triggers the same promotion
+ *   emails as Case D.
  *
  * References:
  *   Phase 3 Group 3 — sub request outcomes → availability records
@@ -111,7 +102,8 @@
  *   lib/sub-requests.js — Case D (mirrored logic for full-resolution
  *     promotion + sub_requests closure)
  *   Project Summary Section 21 — "Organiser-added player removal
- *     notification" (the feature this revision implements)
+ *     notification" and "Session cancellation reason" (the cancelled-
+ *     session guard added this revision)
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -147,7 +139,7 @@ export async function POST(request) {
 
       const { data: session, error: sessionFetchError } = await supabaseAdmin
         .from('sessions')
-        .select('id, status, session_date, start_time, courts_available, locations ( name )')
+        .select('id, status, session_date, start_time, courts_available, cancelled_at, locations ( name )')
         .eq('id', session_id)
         .single()
 
@@ -157,6 +149,17 @@ export async function POST(request) {
           sessionFetchError?.message
         )
         results.push({ session_id, player_id, error: 'Session not found' })
+        continue
+      }
+
+      // ------------------------------------------------------------------
+      // NEW: reject the add outright if this session has been cancelled.
+      // ------------------------------------------------------------------
+      if (session.cancelled_at) {
+        console.warn(
+          `[api/admin/availability] POST: session ${session_id} is cancelled — rejecting add`
+        )
+        results.push({ session_id, player_id, error: 'Session has been cancelled' })
         continue
       }
 
@@ -418,8 +421,8 @@ export async function DELETE(request) {
       return Response.json({ error: 'availabilityId required' }, { status: 400 })
     }
 
-    // organiser_added now included in this select — required to decide
-    // whether the pre-close branch below needs to fire the new alert.
+    // organiser_added included in this select — required to decide whether
+    // the pre-close branch below needs to fire the removal alert.
     const { data: avail, error: fetchError } = await supabaseAdmin
       .from('availability')
       .select(`
@@ -488,10 +491,10 @@ export async function DELETE(request) {
       }
 
       // ------------------------------------------------------------------
-      // NEW: organiser-added player removal notification.
-      // The delete above is unchanged either way — this only adds an email
-      // alongside it when the record being removed was originally added by
-      // the organiser (organiser_added = true). Normal pre-close removals
+      // Organiser-added player removal notification. The delete above is
+      // unchanged either way — this only adds an email alongside it when
+      // the record being removed was originally added by the organiser
+      // (organiser_added = true). Normal pre-close removals
       // (organiser_added = false) remain silent per Phase 2 Section 7.3.
       // ------------------------------------------------------------------
       if (wasOrganiserAdded) {

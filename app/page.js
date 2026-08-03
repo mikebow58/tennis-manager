@@ -67,8 +67,8 @@ export default async function Dashboard({ searchParams }) {
   if (week) {
     // V2: join locations so we have the location name for display.
     // courts_available replaces court_count.
-    // organiser_notes is included via select('*') below — internal-only
-    // note, rendered on the day card but never sent to players.
+    // cancelled_at / cancellation_note / organiser_notes are included via
+    // select('*') below.
     const { data } = await supabase
       .from('sessions')
       .select('*, locations(name)')
@@ -107,7 +107,11 @@ export default async function Dashboard({ searchParams }) {
 
   const totalPlayers = allPlayers?.length || 0
 
+  // Cancelled sessions are excluded from the "courts short" metric — a
+  // cancelled session isn't short, it's cancelled. See the new Cancelled
+  // day-card state below for how these render instead.
   const shortCount = sessions.filter(s => {
+    if (s.cancelled_at) return false
     if (isSessionCompleted(s.session_date)) return false
     const count = availabilityCounts[s.id] || 0
     return count === 0 || count % 4 !== 0
@@ -223,9 +227,41 @@ export default async function Dashboard({ searchParams }) {
                 const spotsNeeded = isFull ? 0 : (Math.ceil(count / 4) * 4) - count
 
                 // Organizer-only note (organiser_notes column) — internal
-                // context for the organizer, never sent to players. Shown
-                // on both the completed and active day card variants below.
+                // context for the organizer, never sent to players.
                 const organizerNote = session.organiser_notes?.trim() || null
+
+                // ------------------------------------------------------
+                // Cancelled state — checked BEFORE the completed check,
+                // since a cancelled session could be in the future or the
+                // past relative to today. Renders a distinct card instead
+                // of the normal open/short/full states.
+                // ------------------------------------------------------
+                if (session.cancelled_at) {
+                  return (
+                    <div
+                      key={session.id}
+                      className="block rounded-xl p-4 bg-red-50 border border-red-200"
+                    >
+                      <div className="text-sm font-medium mb-1 text-red-900">{dateLabel}</div>
+                      <div className="text-xs text-red-400 mb-3">
+                        {formatTime(session.start_time)} · {locationName}
+                      </div>
+                      {session.cancellation_note && (
+                        <div className="text-xs text-red-700 italic mb-3 border-t border-red-200 pt-2">
+                          “{session.cancellation_note}”
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-red-400">
+                          {count} player{count !== 1 ? 's' : ''}
+                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-600 text-white">
+                          Cancelled
+                        </span>
+                      </div>
+                    </div>
+                  )
+                }
 
                 if (completed) {
                   return (
@@ -317,17 +353,23 @@ export default async function Dashboard({ searchParams }) {
                   })
                   return (
                     <div key={session.id} className="flex justify-between items-center">
-                      <span className={`text-xs ${completed ? 'text-gray-300' : 'text-gray-700'}`}>
+                      <span className={`text-xs ${
+                        session.cancelled_at || completed ? 'text-gray-300' : 'text-gray-700'
+                      }`}>
                         {dateLabel}
                       </span>
                       <span className={`text-xs ${
-                        completed
+                        session.cancelled_at
+                          ? 'text-red-400'
+                          : completed
                           ? 'text-gray-300'
                           : session.reminder_sent_at
                           ? 'text-green-600'
                           : 'text-gray-400'
                       }`}>
-                        {completed
+                        {session.cancelled_at
+                          ? 'Cancelled'
+                          : completed
                           ? 'Completed'
                           : session.reminder_sent_at
                           ? `Sent · ${new Date(session.reminder_sent_at).toLocaleDateString('en-US', {

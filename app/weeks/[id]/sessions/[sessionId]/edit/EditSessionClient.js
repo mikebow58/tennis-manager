@@ -6,9 +6,15 @@
  * Saves changes via PATCH /api/sessions/[sessionId].
  *
  * Fields: start_time, location_id, courts_available, format, notes,
- * organiser_notes (NEW this revision — internal-only note, never shown to
- * players; distinct from `notes`, which IS included in the reminder email).
+ * organiser_notes (internal-only note, never shown to players; distinct
+ * from `notes`, which IS included in the reminder email).
  * Date and status are intentionally not editable here.
+ *
+ * canDelete (NEW this revision): computed server-side in page.js from the
+ * parent week's signup_sent_at and this session's player count. When false,
+ * the Delete button is hidden and replaced with an explanation pointing the
+ * organiser to the "Cancel this session" action on the session detail page
+ * instead — see page.js header comment for the full eligibility rule.
  */
 
 'use client'
@@ -17,7 +23,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getTimeOptions, formatTime } from '@/lib/utils'
 
-export default function EditSessionClient({ session, locations, sessionDateLabel, weekId }) {
+export default function EditSessionClient({ session, locations, sessionDateLabel, weekId, canDelete }) {
   const router = useRouter()
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -177,9 +183,9 @@ export default function EditSessionClient({ session, locations, sessionDateLabel
               />
             </div>
 
-            {/* Organizer note — internal only, NEW this revision. Distinct
-                from the field above: never sent to players, shown only on
-                the admin dashboard day card and this edit screen. */}
+            {/* Organizer note — internal only. Distinct from the field
+                above: never sent to players, shown only on the admin
+                dashboard day card and this edit screen. */}
             <div>
               <label className="block text-sm text-gray-600 mb-1">
                 Organizer note{' '}
@@ -202,14 +208,29 @@ export default function EditSessionClient({ session, locations, sessionDateLabel
               >
                 {saving ? 'Saving…' : 'Save changes'}
               </button>
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={deleting || saving}
-                className="text-red-500 text-sm hover:text-red-700 disabled:opacity-50"
-              >
-                {deleting ? 'Deleting…' : 'Delete session'}
-              </button>
+
+              {canDelete ? (
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={deleting || saving}
+                  className="text-red-500 text-sm hover:text-red-700 disabled:opacity-50"
+                >
+                  {deleting ? 'Deleting…' : 'Delete session'}
+                </button>
+              ) : (
+                <p className="text-xs text-gray-400 text-right max-w-[220px]">
+                  This session can no longer be deleted — players have signed up since the
+                  signup email went out. Use{' '}
+                  <a
+                    href={`/weeks/${weekId}/sessions/${session.id}`}
+                    className="text-blue-600 hover:underline"
+                  >
+                    Cancel this session
+                  </a>{' '}
+                  instead.
+                </p>
+              )}
             </div>
 
           </form>

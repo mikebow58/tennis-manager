@@ -1,6 +1,7 @@
 import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import SendReminderButton from '@/app/SendReminderButton'
 import RemovePlayerButton from './RemovePlayerButton'
+import CancelSessionButton from './CancelSessionButton'
 import { formatTime, getSkillLabel } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
@@ -10,6 +11,10 @@ export default async function SessionPage({ params }) {
 
   // V2: join locations for location name display.
   // courts_available replaces court_count.
+  // cancelled_at / cancellation_note read here to drive the cancelled
+  // banner and to hide add/remove player controls once a session has been
+  // cancelled — see CancelSessionButton and app/api/sessions/[sessionId]/
+  // cancel/route.js for the organiser's simplified cancellation design.
   const { data: session, error: sessionError } = await supabase
     .from('sessions')
     .select('*, locations(name)')
@@ -58,6 +63,18 @@ export default async function SessionPage({ params }) {
   const spotsNeeded = (Math.ceil(playerCount / 4) * 4) - playerCount
   const isFull = playerCount > 0 && playerCount % 4 === 0
 
+  const isCancelled = !!session.cancelled_at
+
+  const cancelledAtLabel = session.cancelled_at
+    ? new Date(session.cancelled_at).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZone: 'America/Denver'
+      })
+    : null
+
   const reminderSentLabel = session.reminder_sent_at
     ? new Date(session.reminder_sent_at).toLocaleDateString('en-US', {
         month: 'short',
@@ -91,6 +108,29 @@ export default async function SessionPage({ params }) {
       </div>
 
       <div className="px-4 md:px-8 py-4 max-w-3xl mx-auto space-y-4">
+
+        {/* ---------------------------------------------------------- */}
+        {/* Cancelled banner OR Cancel-this-session action              */}
+        {/* ---------------------------------------------------------- */}
+        {isCancelled ? (
+          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+            <div className="text-sm font-semibold text-red-800 mb-1">
+              This session has been cancelled
+            </div>
+            {session.cancellation_note && (
+              <div className="text-xs text-red-700 italic mb-1">
+                “{session.cancellation_note}”
+              </div>
+            )}
+            <div className="text-xs text-red-500">
+              Cancelled {cancelledAtLabel}
+            </div>
+          </div>
+        ) : (
+          <div>
+            <CancelSessionButton sessionId={sessionId} />
+          </div>
+        )}
 
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <div className="bg-gray-50 border-b border-gray-200 px-4 py-3 flex justify-between items-center">
@@ -128,24 +168,27 @@ export default async function SessionPage({ params }) {
           <div className="flex justify-between items-center mb-2">
             <div className="flex items-center gap-3">
               <h2 className="text-sm font-medium text-gray-900">Players</h2>
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                isFull
-                  ? 'bg-green-100 text-green-700'
-                  : playerCount === 0
-                  ? 'bg-gray-100 text-gray-500'
-                  : 'bg-amber-100 text-amber-700'
-              }`}>
-                {playerCount} signed up
-                {!isFull && playerCount > 0 && ` · needs ${spotsNeeded} more`}
-                {isFull && ' · full'}
-              </span>
+              {!isCancelled && (
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                  isFull
+                    ? 'bg-green-100 text-green-700'
+                    : playerCount === 0
+                    ? 'bg-gray-100 text-gray-500'
+                    : 'bg-amber-100 text-amber-700'
+                }`}>
+                  {playerCount} signed up
+                  {!isFull && playerCount > 0 && ` · needs ${spotsNeeded} more`}
+                  {isFull && ' · full'}
+                </span>
+              )}
             </div>
-            
+            {!isCancelled && (
               <a href={`/weeks/${id}/sessions/${sessionId}/add-player`}
-              className="bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 text-xs font-medium"
-            >
-              Add player
-            </a>
+                className="bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 text-xs font-medium"
+              >
+                Add player
+              </a>
+            )}
           </div>
 
           {availability.length === 0 ? (
@@ -170,10 +213,12 @@ export default async function SessionPage({ params }) {
                         : ''}
                     </div>
                   </div>
-                  <RemovePlayerButton
-                    availabilityId={entry.id}
-                    playerName={`${entry.players.first_name} ${entry.players.last_name}`}
-                  />
+                  {!isCancelled && (
+                    <RemovePlayerButton
+                      availabilityId={entry.id}
+                      playerName={`${entry.players.first_name} ${entry.players.last_name}`}
+                    />
+                  )}
                 </div>
               ))}
             </div>
@@ -193,7 +238,9 @@ export default async function SessionPage({ params }) {
           <div className="px-4 py-3 space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-xs text-gray-500">Reminder</span>
-              {reminderSentLabel ? (
+              {isCancelled ? (
+                <span className="text-xs text-red-500 font-medium">Session cancelled</span>
+              ) : reminderSentLabel ? (
                 <span className="text-xs text-green-600 font-medium">
                   Sent · {reminderSentLabel}
                 </span>

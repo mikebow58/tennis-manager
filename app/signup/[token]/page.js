@@ -4,10 +4,19 @@ import SignupForm from './SignupForm'
 export default async function SignupPage({ params }) {
   const { token } = params
 
+  // BUG FIX (Aug 2026): previously this query matched on signup_token alone,
+  // with no check that the player is still active. That meant a deactivated
+  // player's old signup link would keep working forever -- they could still
+  // see open sessions and sign up for them. Adding .eq('active', true) closes
+  // that gap. A deactivated player's token now falls through to the same
+  // "invalid or expired" message as a bad/unknown token below -- we don't
+  // want to reveal to a deactivated player specifically *why* their link
+  // stopped working, just that it did.
   const { data: player, error: playerError } = await supabase
     .from('players')
     .select('id, first_name, last_name, signup_token')
     .eq('signup_token', token)
+    .eq('active', true)
     .single()
 
   if (playerError || !player) {

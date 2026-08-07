@@ -28,6 +28,19 @@
  * This cron deduplicates by session_date so it does not double-fire
  * for the same day when multiple sessions share it.
  *
+ * FULL/SHORT CHECK (fixed Aug 2026 — post-beta item #12, full/short logic
+ * audit): this cron previously computed isFull locally as
+ * confirmed_count % 4 === 0 (courts-complete), which deviated from Phase 1
+ * Section 4.8's specified check of confirmed_count >= courts_available * 4
+ * (capacity-based). The two formulas agree in the normal case, since
+ * capacity_trigger is always a multiple of 4 — they can only diverge when
+ * an organiser manual add pushes confirmed_count above capacity without
+ * landing on an exact multiple of 4 (Phase 2 Section 5.6's overflow case).
+ * Now uses lib/session-capacity.js's getSessionRosterCondition, the same
+ * capacity-aware helper already used by the player-facing signup route and
+ * lib/waitlist-promotion.js, so this cron's full/short determination is
+ * consistent with the rest of the codebase.
+ *
  * Tables read:   sessions, availability, locations (join), weeks (join),
  *                admin_settings
  * Tables written: sessions (court_assignment_notified_at),
@@ -40,7 +53,8 @@
  *
  * References:
  *   Phase 1 Cron Map — Section 4.8
- *   Phase 2 State Machines — Section 4.5 (Procedure 2), Section 6.2
+ *   Phase 2 State Machines — Section 4.5 (Procedure 2), Section 6.2,
+ *     Section 5.6 (capacity overflow / >= rationale)
  *   Phase 3 Cross-Lifecycle — Group 5 (6pm fires)
  *   Automation Logic — Section 8.2 (Path B)
  */
@@ -50,6 +64,7 @@ import { sendCourtAssignmentReview } from '@/lib/email'
 import { runProcedure2 } from '@/lib/court-assignment'
 import { formatDeadlineTime } from '@/lib/utils'
 import { getAdminEmail } from '@/lib/admin-settings'
+import { getSessionRosterCondition } from '@/lib/session-capacity'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -158,22 +173,24 @@ export async function GET(request) {
     // Per Phase 1 §4.8: full sessions should have been handled by
     // event-driven logic — flag as investigation item if notified_at
     // is still NULL.
+    //
+    // Uses getSessionRosterCondition (capacity-based: confirmed_count >=
+    // courts_available * 4, or anticipated_courts * 4 for Mon/Tue) rather
+    // than a local confirmed_count % 4 === 0 check, per Phase 1 §4.8's
+    // spec and for consistency with the rest of the codebase (see file
+    // header note above).
     // ------------------------------------------------------------------
-    const { count: confirmedCount, error: confirmedError } = await supabaseAdmin
-      .from('availability')
-      .select('id', { count: 'exact', head: true })
-      .eq('session_id', session.id)
-      .eq('status', 'confirmed')
+    const condition = await getSessionRosterCondition({ sessionId: session.id })
 
-    if (confirmedError) {
+    if (!condition) {
       console.error(
-        `[daily-6pm-court-assignment] Error fetching confirmed count for session ${session.id}:`,
-        confirmedError.message
+        `[daily-6pm-court-assignment] Error fetching roster condition for session ${session.id} — skipping.`
       )
       continue
     }
 
-    const isFull = (confirmedCount ?? 0) % 4 === 0
+    const confirmedCount = condition.confirmedCount
+    const isFull = condition.isFull
 
     if (isFull && session.court_assignment_notified_at) {
   // Full and already notified — Path AA/A event-driven logic handled this.

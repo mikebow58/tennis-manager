@@ -9,12 +9,14 @@
 //   3. Locations — full CRUD: name, address, total_courts, notes, and an
 //      active/deactivate toggle (soft delete). New locations can be added
 //      via a small inline form.
+//   4. Communication — include-roster-in-reminder toggle (post-beta item #5)
 //
-// THIS REVISION: locations section expanded from "total courts only" to full
-// CRUD. Previously the organiser had no way to add a location, rename one,
-// set/edit its address, or deactivate one without direct SQL access — this
-// closes that gap. Deactivating is a soft delete (locations.active = false),
-// consistent with how the rest of the app handles history (e.g. players).
+// THIS REVISION: added the Communication section with a single toggle
+// controlling whether confirmed-tier reminder emails include the
+// alphabetical roster of confirmed players. Saves instantly on click, same
+// pattern as the location active/inactive toggle below — a boolean flip is
+// a meaningfully different interaction than a text field edit, so instant
+// feedback (with revert-on-failure) matters more here than a batched save.
 //
 // Each section saves independently via PUT /api/admin/settings, sending
 // only the field(s) being changed. Creating a new location is a separate
@@ -58,12 +60,16 @@ export default function AdminSettingsPage() {
   const [addingLocation, setAddingLocation] = useState(false)
   const [addLocationError, setAddLocationError] = useState(null)
 
+  // Communication section state — include-roster-in-reminder toggle.
+  const [includeRoster, setIncludeRoster] = useState(true)
+  const [includeRosterSaving, setIncludeRosterSaving] = useState(false)
+
   useEffect(() => {
     fetchSettings()
   }, [])
 
   // ------------------------------------------------------------------
-  // Initial load — fetch all three settings together.
+  // Initial load — fetch all settings together.
   // ------------------------------------------------------------------
   async function fetchSettings() {
     setLoading(true)
@@ -85,6 +91,9 @@ export default function AdminSettingsPage() {
           active: loc.active,
         }))
       )
+      // Default true if the API somehow omits the field — matches the
+      // lib/admin-settings.js default-on behaviour for a missing key.
+      setIncludeRoster(data.includeRosterInReminder ?? true)
     } catch (err) {
       console.error('[admin/settings] fetchSettings error:', err)
       setLoadError('Could not load settings. Try refreshing the page.')
@@ -288,6 +297,36 @@ export default function AdminSettingsPage() {
     }
   }
 
+  // ------------------------------------------------------------------
+  // Toggle: include roster in confirmed reminder emails. Instant save,
+  // same optimistic-update-with-revert pattern as toggleLocationActive.
+  // ------------------------------------------------------------------
+  async function toggleIncludeRoster() {
+    const newValue = !includeRoster
+    setIncludeRoster(newValue)
+    setIncludeRosterSaving(true)
+
+    try {
+      const res = await fetch('/api/admin/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ includeRosterInReminder: newValue }),
+      })
+      const data = await res.json()
+      const success = data?.results?.includeRosterInReminder?.success
+      if (!success) {
+        setIncludeRoster(!newValue)
+        alert('Could not update this setting — try again.')
+      }
+    } catch (err) {
+      console.error('[admin/settings] toggleIncludeRoster error:', err)
+      setIncludeRoster(!newValue)
+      alert('Could not update this setting — try again.')
+    } finally {
+      setIncludeRosterSaving(false)
+    }
+  }
+
   // Disable the locations save button if any field is invalid — prevents
   // accidentally writing NaN, a negative court count, or an empty name.
   const locationsValid = locations.every((loc) => {
@@ -386,6 +425,46 @@ export default function AdminSettingsPage() {
           {startTimeStatus === 'error' && (
             <p className="text-xs text-red-600 mt-2">Could not save — try again.</p>
           )}
+        </section>
+
+        {/* ------------------------------------------------------------ */}
+        {/* Communication                                                 */}
+        {/* ------------------------------------------------------------ */}
+        <section className="bg-white border border-gray-200 rounded-xl px-6 py-5">
+          <h2 className="text-sm font-semibold text-gray-800">Communication</h2>
+          <p className="text-xs text-gray-500 mt-1 mb-4">
+            Controls what's included in automated player emails.
+          </p>
+
+          <div className="flex items-center justify-between">
+            <div className="pr-4">
+              <div className="text-sm font-medium text-gray-800">
+                Include roster in reminder emails
+              </div>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Confirmed players receive an alphabetical list of who else is confirmed
+                (first name + last initial). Tentative players never see this — their
+                reminder stays status-only. On multi-location days, the list combines
+                confirmed players across every location for that day.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={toggleIncludeRoster}
+              disabled={includeRosterSaving}
+              role="switch"
+              aria-checked={includeRoster}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+                includeRoster ? 'bg-green-600' : 'bg-gray-300'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  includeRoster ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
         </section>
 
         {/* ------------------------------------------------------------ */}

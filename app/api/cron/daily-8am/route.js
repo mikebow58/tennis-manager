@@ -8,7 +8,7 @@
  * Three checks run every day. All three always run regardless of the
  * outcome of the others. Any combination may produce emissions.
  *
- * CHECK A — RETIRED as of this revision.
+ * CHECK A — RETIRED as of a prior revision.
  *   Previously: a standalone pre-close fill-in check for Wed–Sat sessions
  *   scheduled for "tomorrow." This was never reachable in practice — by
  *   the time a Wed–Sat session's date is "tomorrow," its reminder has
@@ -33,35 +33,64 @@
  *   sent here. Needs a follow-up fix before the waitlist-first check
  *   (Phase 4) can be considered fully reliable for Wed–Sat sessions.
  *
- * CHECK B — Reminder sends:
- *   Finds sessions whose reminder is due today (per day-of-week timing
- *   rules), runs Procedure 1 (initial court balancing) on each, sends
- *   tiered reminder emails (confirmed or tentative), fires the initial
- *   sub-request broadcast if the session closed short (Step 5.5, new),
- *   and closes the session.
+ * CHECK B — Reminder sends. THIS REVISION: restructured from a single pass
+ *   into two passes (see below) to fix a multi-location roster-in-reminder
+ *   timing bug (post-beta item #5).
+ *
+ *   PASS 1 — Procedure 1 for every due-today session:
+ *     For each session whose reminder is due today, runs Procedure 1
+ *     (initial court balancing) and writes the resulting confirmed/tentative
+ *     split to the availability table. No emails are sent in this pass and
+ *     no session is closed yet (except the zero-signup case, which has
+ *     nothing left to do and is closed immediately). Results are kept in
+ *     memory for Pass 2.
+ *
+ *   PASS 2 — Roster building, broadcasts, sends, close:
+ *     Only begins after every session in Pass 1 has been fully processed.
+ *     This ordering guarantee is the actual fix: on a multi-location day,
+ *     Session A's reminder email can safely include Session B's confirmed
+ *     roster, because by the time Pass 2 runs, B's Procedure 1 has already
+ *     completed and committed — there's no possibility of listing a player
+ *     who is about to be (or already was, in the same run) demoted to
+ *     tentative. A single-pass design couldn't guarantee this, since
+ *     sessions aren't queried in a defined order and Session A could be
+ *     processed before Session B ever reaches Procedure 1.
+ *
+ *     For each session: fires the initial sub-request broadcast if closed
+ *     short (Step 5.5), builds the roster list (if the organiser's
+ *     Communication setting is on — see lib/admin-settings.js
+ *     getIncludeRosterInReminder), sends tiered reminder emails, and closes
+ *     the session.
  *
  * CHECK C — Week close:
  *   Finds weeks in 'sent' status where all child sessions have passed
  *   their start time and transitions them to 'closed'.
  *
- * Tables read:  weeks, sessions, availability, players, locations
+ * Tables read:  weeks, sessions, availability, players, locations,
+ *               admin_settings
  * Tables written: sessions (status, reminder_sent_at),
  *                 availability (status, court_assignment_status),
- *                 sub_requests, sub_request_recipients (new, Step 5.5),
+ *                 sub_requests, sub_request_recipients,
  *                 weeks (status, closed_at)
  *
  * Emails sent:
- *   - Confirmed players: sendConfirmedReminderBatch (Check B)
- *   - Tentative players: sendTentativeReminderBatch (Check B)
- *   - First Call players: sendSubRequestBroadcast (Check B, Step 5.5, real
- *     player-facing confirm/decline email — only if session closed short
- *     and the First Call pool is non-empty)
+ *   - Confirmed players: sendConfirmedReminderBatch (Check B Pass 2) —
+ *     now optionally includes the roster of confirmed players (post-beta
+ *     item #5)
+ *   - Tentative players: sendTentativeReminderBatch (Check B Pass 2) —
+ *     never includes the roster; the tiered reminder system's own design
+ *     principle keeps this message status-only (Automation Logic §2.1)
+ *   - First Call players: sendSubRequestBroadcast (Check B Pass 2, Step
+ *     5.5, real player-facing confirm/decline email — only if session
+ *     closed short and the First Call pool is non-empty)
  *
  * References:
  *   Phase 1 Cron Map — Section 4.5 (Check B) and Section 4.5 (Check C)
  *   Phase 2 State Machines — Section 4.4 (Procedure 1), Section 4.2
  *   Automation Logic — Section 2.1 (tiered reminder system), Section 12
  *     (cancellation and sub request logic — subsNeeded formula reused here)
+ *   Project Summary — Section 21, "Roster in reminder email" (post-beta
+ *     item #5)
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -72,7 +101,7 @@ import {
 } from '@/lib/email'
 import { runProcedure1, resolveSkill, SKILL_SELF_TO_ADMIN } from '@/lib/court-balancing'
 import { buildTargetingPool } from '@/lib/targeting'
-import { getAdminEmail } from '@/lib/admin-settings'
+import { getAdminEmail, getIncludeRosterInReminder } from '@/lib/admin-settings'
 import { computeBroadcastDeadlineLabel } from '@/lib/sub-requests'
 
 export async function GET(request) {
@@ -124,6 +153,12 @@ export async function GET(request) {
     console.error('[daily-8am] getAdminEmail() returned no value — organiser alerts will be skipped where applicable')
   }
 
+  // Resolve the roster-in-reminder Communication setting once up front —
+  // read once per cron run rather than per session, since it can't change
+  // mid-run and re-reading per session would just be wasted queries.
+  const includeRosterInReminder = await getIncludeRosterInReminder()
+  console.log(`[daily-8am] includeRosterInReminder setting: ${includeRosterInReminder}`)
+
   // Collect outcome summaries from each check for the final response.
   const outcomes = { checkA: null, checkB: null, checkC: null }
 
@@ -145,28 +180,14 @@ export async function GET(request) {
   console.log('[daily-8am] Check A: retired. Logic now lives in Check B Step 5.5.')
 
   // ==================================================================
-  // CHECK B — Reminder sends
-  //
-  // Decision tree (Phase 1 Section 4.5 Check B):
-  //   1. Query sessions WHERE status = 'open' AND reminder_sent_at IS NULL
-  //      AND cancelled_at IS NULL.
-  //   2. For each: apply timing rule to determine if reminder is due today.
-  //      Monday session    → remind Sunday   (session_date - 1 day)
-  //      Tuesday session   → remind Monday   (session_date - 1 day)
-  //      Wed–Sat session   → remind 2 days prior (session_date - 2 days)
-  //   3. If due: run Procedure 1 (initial court balancing).
-  //   4. Send tiered reminders (confirmed or tentative).
-  //   5. NEW — Step 5.5: if the session closed short (tentative players
-  //      exist), fire the initial sub-request broadcast immediately.
-  //   6. UPDATE sessions SET status = 'closed', reminder_sent_at = now().
+  // CHECK B — Reminder sends (two-pass — see file header comment)
   // ==================================================================
   console.log('[daily-8am] Check B: starting reminder send check.')
 
   try {
     // Fetch all open, un-reminded, non-cancelled sessions across all
-    // weeks currently in 'sent' status. match_type is now included —
-    // required by buildTargetingPool in Step 5.5 (previously only
-    // fetched by the now-retired Check A).
+    // weeks currently in 'sent' status. match_type is included — required
+    // by buildTargetingPool in Step 5.5.
     const { data: openSessions, error: sessionsError } = await supabaseAdmin
       .from('sessions')
       .select(`
@@ -189,13 +210,26 @@ export async function GET(request) {
       console.error('[daily-8am] Check B: error querying sessions:', sessionsError.message)
       outcomes.checkB = 'error'
     } else {
-      console.log(`[daily-8am] Check B: found ${openSessions.length} open session(s) to evaluate.`)
+      console.log(`[daily-8am] Check B: found ${openSessions.length} session(s) to evaluate.`)
 
-      // Track totals across all sessions for the final log summary.
+      // Track totals across both passes for the final log summary.
       let sessionsReminded = 0
       let totalConfirmed = 0
       let totalTentative = 0
       let subRequestsFired = 0
+
+      // Pass 1 results, keyed by session id. Only sessions that make it
+      // all the way through Pass 1 successfully (Procedure 1 ran, DB
+      // writes succeeded) get an entry here — those are the only ones
+      // Pass 2 will process.
+      const pass1Results = new Map()
+
+      // ================================================================
+      // PASS 1 — Procedure 1 for every due-today session.
+      // No emails sent here. No sessions closed here (except the
+      // zero-signup case, which has nothing left for Pass 2 to do).
+      // ================================================================
+      console.log('[daily-8am] Check B Pass 1: running Procedure 1 for due-today sessions.')
 
       for (const session of openSessions) {
         // ----------------------------------------------------------------
@@ -218,14 +252,14 @@ export async function GET(request) {
           // Reminder not due today — skip this session. Expected on
           // Friday and Saturday mornings when no reminder is due.
           console.log(
-            `[daily-8am] Check B: session ${session.id} (${session.session_date}) ` +
+            `[daily-8am] Check B Pass 1: session ${session.id} (${session.session_date}) ` +
             `dayOfWeek=${dayOfWeek} daysPrior=${daysPrior} reminderDue=${reminderDateStr} today=${todayStr} — skipping.`
           )
           continue
         }
 
         console.log(
-          `[daily-8am] Check B: session ${session.id} (${session.session_date}) ` +
+          `[daily-8am] Check B Pass 1: session ${session.id} (${session.session_date}) ` +
           `reminder due today — proceeding with Procedure 1.`
         )
 
@@ -233,6 +267,8 @@ export async function GET(request) {
         // Step 2: Fetch all signed-up players for this session.
         // All players are currently in 'confirmed' status at this point —
         // 'tentative' is a Procedure 1 output, not set at signup time.
+        // last_name is included — required to build "First L." roster
+        // entries in Pass 2 (post-beta item #5).
         // ----------------------------------------------------------------
         const { data: availability, error: availError } = await supabaseAdmin
           .from('availability')
@@ -243,6 +279,7 @@ export async function GET(request) {
             players (
               id,
               first_name,
+              last_name,
               email,
               skill_admin,
               skill_self,
@@ -255,7 +292,7 @@ export async function GET(request) {
 
         if (availError) {
           console.error(
-            `[daily-8am] Check B: error fetching availability for session ${session.id}:`,
+            `[daily-8am] Check B Pass 1: error fetching availability for session ${session.id}:`,
             availError.message
           )
           continue
@@ -263,15 +300,17 @@ export async function GET(request) {
 
         const playerCount = availability.length
         console.log(
-          `[daily-8am] Check B: session ${session.id} has ${playerCount} signed-up player(s).`
+          `[daily-8am] Check B Pass 1: session ${session.id} has ${playerCount} signed-up player(s).`
         )
 
         if (playerCount === 0) {
           // No players signed up — close the session without sending any
           // reminders or firing a sub request. Nobody was ever confirmed,
           // so there's no tentative player and nothing to broadcast for.
+          // Nothing for Pass 2 to do — closed immediately, not added to
+          // pass1Results.
           console.log(
-            `[daily-8am] Check B: session ${session.id} has 0 players — closing with no reminders.`
+            `[daily-8am] Check B Pass 1: session ${session.id} has 0 players — closing with no reminders.`
           )
           await supabaseAdmin
             .from('sessions')
@@ -288,6 +327,7 @@ export async function GET(request) {
           availabilityId: avail.id,
           playerId: avail.player_id,
           firstName: avail.players.first_name,
+          lastName: avail.players.last_name,
           email: avail.players.email,
           signupToken: avail.players.signup_token,
           createdAt: avail.created_at,
@@ -301,7 +341,7 @@ export async function GET(request) {
           runProcedure1(players)
 
         console.log(
-          `[daily-8am] Check B: Procedure 1 — ${playerCount} players, ` +
+          `[daily-8am] Check B Pass 1: Procedure 1 for session ${session.id} — ${playerCount} players, ` +
           `${courtsCount} full court(s), ${tentativeCount} tentative. ` +
           `bestScore=${bestScore}`
         )
@@ -317,6 +357,8 @@ export async function GET(request) {
           .filter((p) => !confirmedPlayerIds.has(p.availabilityId))
           .map((p) => p.availabilityId)
 
+        let writeFailed = false
+
         // Write tentative status for incomplete-court players.
         if (tentativeAvailIds.length > 0) {
           const { error: tentativeError } = await supabaseAdmin
@@ -329,20 +371,19 @@ export async function GET(request) {
 
           if (tentativeError) {
             console.error(
-              `[daily-8am] Check B: error writing tentative status for session ${session.id}:`,
+              `[daily-8am] Check B Pass 1: error writing tentative status for session ${session.id}:`,
               tentativeError.message
             )
-            // Do not continue — if we can't write status we shouldn't send
-            // reminders, as players would receive the wrong message tier.
-            continue
+            writeFailed = true
+          } else {
+            console.log(
+              `[daily-8am] Check B Pass 1: session ${session.id} — ${tentativeAvailIds.length} player(s) set to tentative.`
+            )
           }
-          console.log(
-            `[daily-8am] Check B: session ${session.id} — ${tentativeAvailIds.length} player(s) set to tentative.`
-          )
         }
 
         // Confirmed players: court_assignment_status set to 'confirmed'.
-        if (confirmedAvailIds.length > 0) {
+        if (!writeFailed && confirmedAvailIds.length > 0) {
           const { error: confirmedError } = await supabaseAdmin
             .from('availability')
             .update({ court_assignment_status: 'confirmed' })
@@ -350,24 +391,80 @@ export async function GET(request) {
 
           if (confirmedError) {
             console.error(
-              `[daily-8am] Check B: error writing confirmed court_assignment_status for session ${session.id}:`,
+              `[daily-8am] Check B Pass 1: error writing confirmed court_assignment_status for session ${session.id}:`,
               confirmedError.message
             )
-            continue
+            writeFailed = true
           }
         }
 
+        if (writeFailed) {
+          // Do not add to pass1Results — if we can't write status we
+          // shouldn't send reminders or include this session in any
+          // sibling's combined roster, as players would receive the
+          // wrong message tier or an inaccurate roster.
+          continue
+        }
+
+        // Success — store everything Pass 2 needs, including this
+        // session's own record (for week_id/session_date day-grouping,
+        // locations, notes, etc.) and sessionDate (avoids recomputing).
+        pass1Results.set(session.id, {
+          session,
+          sessionDate,
+          players,
+          confirmedPlayerIds,
+          confirmedAvailIds,
+          tentativeAvailIds,
+        })
+      } // end Pass 1 loop
+
+      console.log(
+        `[daily-8am] Check B Pass 1 complete. ${pass1Results.size} session(s) ready for Pass 2.`
+      )
+
+      // ================================================================
+      // Build the day-grouping map used for multi-location combined
+      // rosters. Only built after Pass 1 has fully finished — this is
+      // the ordering guarantee that fixes the roster timing bug (see
+      // file header comment).
+      // ================================================================
+      const sessionsByDay = new Map() // "weekId:sessionDate" -> [pass1Result, ...]
+      for (const result of pass1Results.values()) {
+        const dayKey = `${result.session.week_id}:${result.session.session_date}`
+        if (!sessionsByDay.has(dayKey)) sessionsByDay.set(dayKey, [])
+        sessionsByDay.get(dayKey).push(result)
+      }
+
+      // ================================================================
+      // PASS 2 — Sub-request broadcasts, roster building, reminder sends,
+      // session close. Every pass1Results entry reflects committed,
+      // final Procedure 1 output for every due-today session — including
+      // siblings on multi-location days.
+      // ================================================================
+      console.log('[daily-8am] Check B Pass 2: broadcasts, roster building, and sends.')
+
+      for (const result of pass1Results.values()) {
+        const {
+          session,
+          sessionDate,
+          players,
+          confirmedPlayerIds,
+          confirmedAvailIds,
+          tentativeAvailIds,
+        } = result
+
         // ----------------------------------------------------------------
-        // Step 5.5 — NEW: Fire the initial sub-request broadcast if this
+        // Step 5.5 — Fire the initial sub-request broadcast if this
         // session closed short.
         //
-        // This replaces the retired Check A. It fires for every day of
-        // week (Mon–Sat), per explicit decision — Mon/Tue sessions closing
-        // short go straight to broadcast just like Wed–Sat, rather than
-        // being excluded the way pre-close fill-in logic used to exclude
-        // them (Automation Logic Section 6.2's Mon/Tue exclusion applied
-        // to the old PRE-close targeted send; this is a post-close initial
-        // broadcast and applies uniformly).
+        // Fires for every day of week (Mon–Sat), per explicit decision —
+        // Mon/Tue sessions closing short go straight to broadcast just
+        // like Wed–Sat, rather than being excluded the way pre-close
+        // fill-in logic used to exclude them (Automation Logic Section
+        // 6.2's Mon/Tue exclusion applied to the old PRE-close targeted
+        // send; this is a post-close initial broadcast and applies
+        // uniformly).
         //
         // subsNeeded formula matches lib/sub-requests.js exactly, for
         // consistency with the cancellation-driven broadcast path.
@@ -377,7 +474,7 @@ export async function GET(request) {
           if (subsNeeded === 0) subsNeeded = 4 // safety fallback — should not occur given tentativeAvailIds.length > 0
 
           console.log(
-            `[daily-8am] Check B Step 5.5: session ${session.id} closed short — ` +
+            `[daily-8am] Check B Pass 2 Step 5.5: session ${session.id} closed short — ` +
             `tentativeCount=${tentativeAvailIds.length} subsNeeded=${subsNeeded}. Firing initial broadcast.`
           )
 
@@ -400,7 +497,7 @@ export async function GET(request) {
           })
 
           console.log(
-            `[daily-8am] Check B Step 5.5: session ${session.id} — firstCallPool size=${firstCallPool.length}`
+            `[daily-8am] Check B Pass 2 Step 5.5: session ${session.id} — firstCallPool size=${firstCallPool.length}`
           )
 
           // Insert sub_requests record. request_type = 'first_call' — this
@@ -424,12 +521,12 @@ export async function GET(request) {
 
           if (subInsertError || !subRequest) {
             console.error(
-              `[daily-8am] Check B Step 5.5: failed to insert sub_requests for session ${session.id}:`,
+              `[daily-8am] Check B Pass 2 Step 5.5: failed to insert sub_requests for session ${session.id}:`,
               subInsertError?.message
             )
           } else {
             console.log(
-              `[daily-8am] Check B Step 5.5: sub_requests record created id=${subRequest.id} ` +
+              `[daily-8am] Check B Pass 2 Step 5.5: sub_requests record created id=${subRequest.id} ` +
               `for session ${session.id}.`
             )
 
@@ -447,22 +544,22 @@ export async function GET(request) {
 
               if (recipientsError) {
                 console.error(
-                  `[daily-8am] Check B Step 5.5: error inserting sub_request_recipients for session ${session.id}:`,
+                  `[daily-8am] Check B Pass 2 Step 5.5: error inserting sub_request_recipients for session ${session.id}:`,
                   recipientsError.message
                 )
               } else {
                 console.log(
-                  `[daily-8am] Check B Step 5.5: ${recipientRows.length} sub_request_recipients inserted.`
+                  `[daily-8am] Check B Pass 2 Step 5.5: ${recipientRows.length} sub_request_recipients inserted.`
                 )
               }
             } else {
               console.log(
-                `[daily-8am] Check B Step 5.5: no First Call players in pool — ` +
+                `[daily-8am] Check B Pass 2 Step 5.5: no First Call players in pool — ` +
                 `sub_requests record created but no recipients inserted.`
               )
             }
 
-           // Real player-facing broadcast — firstCallPool entries already
+            // Real player-facing broadcast — firstCallPool entries already
             // carry firstName/email/signupToken (buildPlayerPayload, lib/
             // targeting.js), the exact shape sendSubRequestBroadcast expects.
             // No adminEmail gate here — this send doesn't depend on the
@@ -479,11 +576,11 @@ export async function GET(request) {
                 deadlineLabel: broadcastDeadlineLabel,
                 subRequestId: subRequest.id,
               }).catch((err) =>
-                console.error(`[daily-8am] Check B Step 5.5: broadcast send failed for session ${session.id}:`, err)
+                console.error(`[daily-8am] Check B Pass 2 Step 5.5: broadcast send failed for session ${session.id}:`, err)
               )
             } else {
               console.log(
-                `[daily-8am] Check B Step 5.5: no First Call players in pool for session ${session.id} — ` +
+                `[daily-8am] Check B Pass 2 Step 5.5: no First Call players in pool for session ${session.id} — ` +
                 `no broadcast email sent (sub_requests record created with zero recipients).`
               )
             }
@@ -492,12 +589,60 @@ export async function GET(request) {
           }
         } else {
           console.log(
-            `[daily-8am] Check B Step 5.5: session ${session.id} closed full — no broadcast needed.`
+            `[daily-8am] Check B Pass 2 Step 5.5: session ${session.id} closed full — no broadcast needed.`
           )
         }
 
         // ----------------------------------------------------------------
-        // Step 6: Build and send tiered reminder emails.
+        // Step 6 — Build roster list (post-beta item #5), if enabled.
+        //
+        // Combines confirmed players from every session sharing this day
+        // (same week_id + session_date) — the "full combined roster on
+        // multi-location days" requirement. Deduped by player_id (defensive
+        // — a player shouldn't normally have confirmed availability on two
+        // sibling sessions the same day, but combining is done safely
+        // either way). Sorted alphabetically by first name, formatted as
+        // "First L.". Confirmed-tier only — never attached to the
+        // tentative reminder, per the tiered reminder system's own design
+        // principle (Automation Logic §2.1: tentative stays status-only).
+        // ----------------------------------------------------------------
+        let rosterNames = []
+        if (includeRosterInReminder) {
+          const dayKey = `${session.week_id}:${session.session_date}`
+          const daySiblings = sessionsByDay.get(dayKey) || [result]
+
+          const seenPlayerIds = new Set()
+          const rosterEntries = []
+
+          for (const sibling of daySiblings) {
+            for (const p of sibling.players) {
+              if (
+                sibling.confirmedPlayerIds.has(p.availabilityId) &&
+                !seenPlayerIds.has(p.playerId)
+              ) {
+                seenPlayerIds.add(p.playerId)
+                rosterEntries.push({ firstName: p.firstName, lastName: p.lastName })
+              }
+            }
+          }
+
+          rosterEntries.sort((a, b) =>
+            (a.firstName ?? '').localeCompare(b.firstName ?? '')
+          )
+
+          rosterNames = rosterEntries.map((p) => {
+            const initial = p.lastName ? `${p.lastName.trim().charAt(0)}.` : ''
+            return `${p.firstName ?? ''} ${initial}`.trim()
+          })
+
+          console.log(
+            `[daily-8am] Check B Pass 2: session ${session.id} — roster built with ` +
+            `${rosterNames.length} name(s) across ${daySiblings.length} sibling session(s).`
+          )
+        }
+
+        // ----------------------------------------------------------------
+        // Step 7: Build and send tiered reminder emails.
         // ----------------------------------------------------------------
         const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
@@ -541,6 +686,7 @@ export async function GET(request) {
             locationName,
             notes: session.notes ?? null,
             cancelUrl: `${baseUrl}/portal/${p.signupToken}`,
+            rosterNames, // post-beta item #5 — empty array if setting is off
           }))
 
         const tentativePlayers = players
@@ -551,32 +697,33 @@ export async function GET(request) {
             sessionDate: sessionDateLabel,
             deadlineLabel,
             cancelUrl: `${baseUrl}/portal/${p.signupToken}`,
+            // No rosterNames — tentative reminder stays status-only.
           }))
 
         if (confirmedPlayers.length > 0) {
           console.log(
-            `[daily-8am] Check B: session ${session.id} — sending ${confirmedPlayers.length} confirmed reminder(s).`
+            `[daily-8am] Check B Pass 2: session ${session.id} — sending ${confirmedPlayers.length} confirmed reminder(s).`
           )
           const { sent, failed } = await sendConfirmedReminderBatch(confirmedPlayers)
           console.log(
-            `[daily-8am] Check B: session ${session.id} — confirmed reminders: sent ${sent}, failed ${failed}.`
+            `[daily-8am] Check B Pass 2: session ${session.id} — confirmed reminders: sent ${sent}, failed ${failed}.`
           )
           totalConfirmed += sent
         }
 
         if (tentativePlayers.length > 0) {
           console.log(
-            `[daily-8am] Check B: session ${session.id} — sending ${tentativePlayers.length} tentative reminder(s).`
+            `[daily-8am] Check B Pass 2: session ${session.id} — sending ${tentativePlayers.length} tentative reminder(s).`
           )
           const { sent, failed } = await sendTentativeReminderBatch(tentativePlayers)
           console.log(
-            `[daily-8am] Check B: session ${session.id} — tentative reminders: sent ${sent}, failed ${failed}.`
+            `[daily-8am] Check B Pass 2: session ${session.id} — tentative reminders: sent ${sent}, failed ${failed}.`
           )
           totalTentative += sent
         }
 
         // ----------------------------------------------------------------
-        // Step 7: Close the session.
+        // Step 8: Close the session.
         // ----------------------------------------------------------------
         const { error: closeError } = await supabaseAdmin
           .from('sessions')
@@ -588,16 +735,16 @@ export async function GET(request) {
 
         if (closeError) {
           console.error(
-            `[daily-8am] Check B: CRITICAL — emails sent but failed to close session ${session.id}:`,
+            `[daily-8am] Check B Pass 2: CRITICAL — emails sent but failed to close session ${session.id}:`,
             closeError.message
           )
         } else {
           console.log(
-            `[daily-8am] Check B: session ${session.id} closed. reminder_sent_at recorded.`
+            `[daily-8am] Check B Pass 2: session ${session.id} closed. reminder_sent_at recorded.`
           )
           sessionsReminded++
         }
-      } // end for loop over sessions
+      } // end Pass 2 loop
 
       outcomes.checkB = {
         sessionsReminded,

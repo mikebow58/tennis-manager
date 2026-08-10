@@ -2,16 +2,18 @@
 //
 // GET  /api/admin/settings — returns current values for all organiser-
 //      configurable settings: admin email, default session start time,
-//      and full location records (name, address, total_courts, notes, active).
+//      full location records (name, address, total_courts, notes, active),
+//      and the include-roster-in-reminder Communication toggle.
 //      Used to populate the settings page.
 //
 // PUT  /api/admin/settings — accepts a partial payload and updates only
-//      the fields present. Three independent settings, three different
-//      underlying tables (admin_settings, default_sessions, locations),
-//      but exposed as a single endpoint since the settings page edits
-//      them together. Location edits here are for EXISTING locations only
-//      (including deactivate/reactivate via the `active` field) — creating
-//      a brand new location is a separate POST (below).
+//      the fields present. Four independent settings, three underlying
+//      tables (admin_settings, default_sessions, locations — the roster
+//      toggle shares admin_settings with the admin email key), exposed as
+//      a single endpoint since the settings page edits them together.
+//      Location edits here are for EXISTING locations only (including
+//      deactivate/reactivate via the `active` field) — creating a brand
+//      new location is a separate POST (below).
 //
 // POST /api/admin/settings — creates a new location. Kept on this same route
 //      file rather than a new /api/admin/locations route, since this file is
@@ -24,9 +26,13 @@
 // reads/writes, per the standard pattern for API routes.
 //
 // Tables touched (all via lib/admin-settings.js):
-//   admin_settings   — admin_email key
+//   admin_settings   — admin_email, include_roster_in_reminder keys
 //   default_sessions — start_time, written to all active rows together
 //   locations        — name, address, total_courts, notes, active
+//
+// THIS REVISION: added includeRosterInReminder (post-beta item #5 —
+// "Roster in reminder email"), the Communication section toggle controlling
+// whether confirmed-tier reminder emails list the confirmed roster.
 
 import {
   getAdminEmail,
@@ -36,38 +42,44 @@ import {
   getLocations,
   createLocation,
   updateLocation,
+  getIncludeRosterInReminder,
+  setIncludeRosterInReminder,
 } from '@/lib/admin-settings'
 
 /**
  * GET /api/admin/settings
  *
- * Reads all three settings in parallel and returns them as a single object.
+ * Reads all settings in parallel and returns them as a single object.
  * No request body. No params.
  *
- * @returns {Promise<Response>} 200 with { adminEmail, defaultStartTime, locations }
+ * @returns {Promise<Response>} 200 with
+ *   { adminEmail, defaultStartTime, locations, includeRosterInReminder }
  *   on success, 500 on any read failure.
  */
 export async function GET() {
   console.log('[admin/settings] GET — fetching current settings')
 
   try {
-    // Run all three reads in parallel — they touch independent tables and
+    // Run all reads in parallel — they touch independent keys/tables and
     // have no ordering dependency on each other.
-    const [adminEmail, defaultStartTime, locations] = await Promise.all([
+    const [adminEmail, defaultStartTime, locations, includeRosterInReminder] = await Promise.all([
       getAdminEmail(),
       getDefaultStartTime(),
       getLocations(),
+      getIncludeRosterInReminder(),
     ])
 
     console.log(
       `[admin/settings] GET — adminEmail=${adminEmail ? 'set' : 'null'} ` +
-      `defaultStartTime=${defaultStartTime ?? 'null'} locationsCount=${locations.length}`
+      `defaultStartTime=${defaultStartTime ?? 'null'} locationsCount=${locations.length} ` +
+      `includeRosterInReminder=${includeRosterInReminder}`
     )
 
     return Response.json({
       adminEmail,
       defaultStartTime,
       locations,
+      includeRosterInReminder,
     })
   } catch (err) {
     console.error('[admin/settings] GET — unexpected error:', err)
@@ -79,7 +91,7 @@ export async function GET() {
  * PUT /api/admin/settings
  *
  * Accepts a partial payload — only the fields present are updated. Each
- * field maps to one of the three underlying lib/admin-settings.js writers.
+ * field maps to one of the underlying lib/admin-settings.js writers.
  * Fields are processed independently; a failure on one does not block the
  * others, but is reported in the response so the UI can show a precise
  * error rather than a blanket failure.
@@ -95,7 +107,8 @@ export async function GET() {
  *     totalCourts?: number,
  *     notes?: string|null,
  *     active?: boolean
- *   }>
+ *   }>,
+ *   includeRosterInReminder?: boolean
  * }
  *
  * @returns {Promise<Response>} 200 with per-field success flags on success,
@@ -114,7 +127,7 @@ export async function PUT(request) {
     return Response.json({ error: 'Invalid request body' }, { status: 400 })
   }
 
-  const { adminEmail, defaultStartTime, locations } = body
+  const { adminEmail, defaultStartTime, locations, includeRosterInReminder } = body
 
   // Track per-field outcomes so the response can tell the UI exactly what
   // succeeded and what didn't, rather than a single pass/fail flag.
@@ -195,6 +208,24 @@ export async function PUT(request) {
 
       const allSucceeded = locationResults.every((r) => r.success)
       results.locations = { success: allSucceeded, results: locationResults }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Include roster in reminder — single boolean, admin_settings table.
+  // ------------------------------------------------------------------
+  if (includeRosterInReminder !== undefined) {
+    console.log(`[admin/settings] PUT — updating includeRosterInReminder to ${includeRosterInReminder}`)
+
+    if (typeof includeRosterInReminder !== 'boolean') {
+      console.warn('[admin/settings] PUT — rejected non-boolean includeRosterInReminder')
+      results.includeRosterInReminder = { success: false, error: 'includeRosterInReminder must be a boolean' }
+    } else {
+      const success = await setIncludeRosterInReminder(includeRosterInReminder)
+      results.includeRosterInReminder = { success }
+      if (!success) {
+        console.error('[admin/settings] PUT — setIncludeRosterInReminder failed')
+      }
     }
   }
 

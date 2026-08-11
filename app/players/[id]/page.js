@@ -3,15 +3,16 @@
 // app/players/[id]/page.js
 //
 // Organiser-facing player edit page. Also see app/api/players/[id]/route.js
-// for the PATCH handler this form submits to.
+// for the PATCH handler this form submits to, and
+// app/api/players/[id]/resend-signup/route.js for the new resend action.
 //
-// BUG FIX (this revision): the form previously sent `mobile` and `player_type`
+// BUG FIX (prior revision): the form previously sent `mobile` and `player_type`
 // fields, neither of which exists as a column on the V2 `players` table — every
 // save was silently failing against the database (PostgREST rejects unknown
 // columns). Fixed by renaming to `mobile_number` and dropping `player_type`
 // entirely (it was already slated for removal per the Project Summary TODO list).
 //
-// NEW THIS REVISION: three fields that previously had no admin UI at all, despite
+// PRIOR REVISION: three fields that previously had no admin UI at all, despite
 // already existing in the schema and being actively read by lib/targeting.js:
 //   - unavailable_days       (text[])  — hard constraint, excludes player from
 //                                        fill-in/sub broadcasts on those days
@@ -36,6 +37,16 @@
 //      doubles/mixed-doubles First Call broadcasts. This is intentional —
 //      confirmed with the organiser: a player willing to sub emergency singles
 //      is assumed fine being asked for doubles too.)
+//
+// THIS REVISION (post-beta item #8 — "One-off signup email resend"): added a
+// "Resend signup link" action, organiser-facing only — this resends the
+// current week's signup link to THIS player, e.g. when they report not
+// having received the weekly email. Enabled state is driven by
+// canResendSignup, returned by GET /api/players/[id] (true only when the
+// player is active AND a week is currently in 'sent' status). The button
+// shows a specific reason when disabled rather than just greying out
+// silently. The actual send re-checks both conditions live server-side —
+// this flag is advisory for the UI only.
 
 import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
@@ -81,6 +92,12 @@ export default function EditPlayerPage({ params: paramsPromise }) {
     match_type_preferences: [],
   })
 
+  // Resend signup link — post-beta item #8.
+  const [canResendSignup, setCanResendSignup] = useState(false)
+  const [resending, setResending] = useState(false)
+  const [resendStatus, setResendStatus] = useState(null) // 'success' | 'error' | null
+  const [resendMessage, setResendMessage] = useState('')
+
   useEffect(() => {
     async function loadPlayer() {
       const res = await fetch(`/api/players/${params.id}`)
@@ -102,6 +119,7 @@ export default function EditPlayerPage({ params: paramsPromise }) {
         unavailable_days: data.unavailable_days ?? [],
         match_type_preferences: data.match_type_preferences ?? [],
       })
+      setCanResendSignup(data.canResendSignup ?? false)
       setLoading(false)
     }
     loadPlayer()
@@ -181,6 +199,46 @@ export default function EditPlayerPage({ params: paramsPromise }) {
     router.push('/players')
   }
 
+  // Resend signup link — post-beta item #8. Single-recipient send via the
+  // new POST /api/players/[id]/resend-signup endpoint, which re-verifies
+  // both preconditions (active player, sent week exists) live rather than
+  // trusting canResendSignup.
+  async function handleResendSignup() {
+    setResending(true)
+    setResendStatus(null)
+    try {
+      const res = await fetch(`/api/players/${params.id}/resend-signup`, {
+        method: 'POST',
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setResendStatus('error')
+        setResendMessage(data?.error || 'Could not resend — try again.')
+      } else {
+        setResendStatus('success')
+        setResendMessage(`Sent — week of ${data.weekLabel}.`)
+      }
+    } catch (err) {
+      console.error('[players/[id]] handleResendSignup error:', err)
+      setResendStatus('error')
+      setResendMessage('Could not resend — try again.')
+    } finally {
+      setResending(false)
+      // Clear the status indicator after a moment, same pattern used on
+      // the admin settings page's save confirmations.
+      setTimeout(() => setResendStatus(null), 4000)
+    }
+  }
+
+  // Disabled reason shown next to the button — canResendSignup alone
+  // doesn't distinguish *why* it's false, but form.active (already loaded
+  // for the form itself) lets us give a specific, useful reason instead of
+  // a generic greyed-out button.
+  const resendDisabledReason = !form.active
+    ? 'This player is inactive.'
+    : 'No signup window is currently open.'
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#f1efe9] flex items-center justify-center text-gray-500 text-sm">
@@ -207,6 +265,37 @@ export default function EditPlayerPage({ params: paramsPromise }) {
 
       <div className="px-4 md:px-8 py-6 max-w-2xl mx-auto">
         <div className="bg-white border border-gray-200 rounded-xl p-6">
+
+          {/* ---------------------------------------------------------- */}
+          {/* Resend signup link — post-beta item #8                     */}
+          {/* ---------------------------------------------------------- */}
+          <div className="border-b border-gray-100 pb-4 mb-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm font-medium text-gray-800">Resend signup link</div>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {canResendSignup
+                    ? "Sends this week's personalised signup link again — useful if they say they never got it."
+                    : resendDisabledReason}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleResendSignup}
+                disabled={!canResendSignup || resending}
+                className="bg-slate-700 text-white px-4 py-2 rounded-lg hover:bg-slate-800 text-sm font-medium disabled:opacity-40 disabled:hover:bg-slate-700 whitespace-nowrap"
+              >
+                {resending ? 'Sending...' : 'Resend'}
+              </button>
+            </div>
+            {resendStatus === 'success' && (
+              <p className="text-xs text-green-700 mt-2">{resendMessage}</p>
+            )}
+            {resendStatus === 'error' && (
+              <p className="text-xs text-red-600 mt-2">{resendMessage}</p>
+            )}
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>

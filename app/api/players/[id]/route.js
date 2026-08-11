@@ -1,6 +1,7 @@
 // app/api/players/[id]/route.js
 //
-// GET    /api/players/[id]  — returns the full player record.
+// GET    /api/players/[id]  — returns the full player record, plus a
+//                              canResendSignup flag (post-beta item #8).
 // PATCH  /api/players/[id]  — updates an explicit whitelist of editable fields.
 // DELETE /api/players/[id]  — hard-deletes the player record.
 //
@@ -13,6 +14,15 @@
 // this meant every player edit save was failing outright. Fixed by explicitly
 // whitelisting the fields this route accepts, so a stray/renamed client field is
 // silently ignored rather than breaking the whole write.
+//
+// THIS REVISION (post-beta item #8 — "One-off signup email resend"): GET now
+// also computes and returns canResendSignup — true only when the player is
+// active AND a week currently exists in 'sent' status. This drives the
+// resend button's disabled state on the edit page (app/players/[id]/page.js).
+// It is advisory only — the actual resend action lives at
+// POST /api/players/[id]/resend-signup, which re-checks both conditions live
+// rather than trusting this flag, since time can pass between page load and
+// the organiser clicking the button.
 //
 // Uses supabaseAdmin (service role) per the standard pattern for API routes —
 // this route is reached only from the logged-in organiser's admin pages, but
@@ -41,8 +51,9 @@ const EDITABLE_FIELDS = [
 
 /**
  * GET /api/players/[id]
- * Returns the full player record. No field filtering — the edit page needs
- * everything to populate its form.
+ * Returns the full player record plus canResendSignup. No field filtering
+ * on the player record itself — the edit page needs everything to populate
+ * its form.
  */
 export async function GET(request, { params }) {
   const { id } = await params
@@ -59,7 +70,32 @@ export async function GET(request, { params }) {
     return Response.json({ error: 'Player not found' }, { status: 404 })
   }
 
-  return Response.json(data)
+  // canResendSignup (post-beta item #8): true only when the player is
+  // active AND a week is currently in 'sent' status. If more than one week
+  // is somehow in 'sent' status at once (a prior week hasn't closed yet
+  // when a new one is sent — sent -> closed only fires once all that
+  // week's sessions have passed), the most recently sent week is the one
+  // that matters — order by signup_sent_at descending, take the first.
+  let canResendSignup = false
+  if (data.active) {
+    const { data: sentWeek, error: weekError } = await supabaseAdmin
+      .from('weeks')
+      .select('id')
+      .eq('status', 'sent')
+      .order('signup_sent_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (weekError) {
+      console.error(`[players/${id}] GET — error checking for sent week:`, weekError.message)
+      // Fail closed — if we can't confirm a sent week exists, don't offer
+      // the resend button rather than risk a misleading enabled state.
+    } else {
+      canResendSignup = !!sentWeek
+    }
+  }
+
+  return Response.json({ ...data, canResendSignup })
 }
 
 /**

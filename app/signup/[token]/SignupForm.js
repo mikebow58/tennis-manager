@@ -3,6 +3,14 @@
 import { useState } from 'react'
 import { formatTime } from '@/lib/utils'
 
+// THIS REVISION (post-beta item #7 — "Confirm button UX improvement"):
+// the submit button below is relabelled from "Confirm signup" to
+// "Submit my days" and made visually more prominent (larger padding,
+// bolder text, subtle shadow) per the Project Summary Section 21 spec.
+// The button was already disabled when no days are selected as of an
+// earlier beta bug-fix pass — that behaviour is unchanged here, still
+// driven by `disabled={saving || selected.length === 0}` below.
+
 export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   const safeInitial = Array.isArray(signedUpSessionIds) ? signedUpSessionIds : []
   const [selected, setSelected] = useState(safeInitial)
@@ -232,13 +240,22 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
         <p className="text-red-600 text-sm mb-4 text-center">{error}</p>
       )}
 
+      {/*
+        Post-beta item #7: relabelled "Confirm signup" -> "Submit my days",
+        and made more prominent — larger vertical padding (py-4 vs py-3),
+        larger text (text-base vs default), bolder weight (font-semibold vs
+        font-medium), and a subtle shadow that lifts slightly further on
+        hover. Disabled state (no days selected, or a save in flight) is
+        unchanged — still the sole gate on this button per the existing
+        beta bug-fix behaviour.
+      */}
       <button
         type="button"
         onClick={handleConfirm}
         disabled={saving || selected.length === 0}
-        className="w-full bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 disabled:opacity-50"
+        className="w-full bg-green-600 text-white py-4 rounded-lg text-base font-semibold shadow-md hover:bg-green-700 hover:shadow-lg transition-shadow disabled:opacity-50 disabled:shadow-none"
       >
-        {saving ? 'Saving...' : 'Confirm signup'}
+        {saving ? 'Submitting...' : 'Submit my days'}
       </button>
     </div>
   )

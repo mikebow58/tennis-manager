@@ -78,6 +78,21 @@ export default async function Dashboard({ searchParams }) {
     sessionIds = sessions.map(s => s.id)
   }
 
+  // Post-beta item #6 — "I'm out this week." Only fetched/shown for the
+  // current active signup week (week.status === 'sent'), per organiser
+  // decision — a pending/approved/future week has no meaningful opt-outs yet.
+  let optedOutPlayers = []
+  if (week && week.status === 'sent') {
+    const { data: optOuts } = await supabase
+      .from('weekly_opt_outs')
+      .select('players(first_name, last_name)')
+      .eq('week_id', week.id)
+    optedOutPlayers = (optOuts || [])
+      .map(o => o.players)
+      .filter(Boolean)
+      .sort((a, b) => a.first_name.localeCompare(b.first_name))
+  }
+
   let availabilityCounts = {}
   const playersWithSignup = new Set()
   let cancellationCount = 0
@@ -339,6 +354,21 @@ export default async function Dashboard({ searchParams }) {
                 )
               })}
             </div>
+
+            {optedOutPlayers.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
+                <div className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">
+                  Players Out This Week
+                </div>
+                <div className="space-y-1">
+                  {optedOutPlayers.map((p, i) => (
+                    <div key={i} className="text-xs text-gray-700">
+                      {p.first_name} {p.last_name}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="bg-white rounded-xl border border-gray-200 p-4">
               <div className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">

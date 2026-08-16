@@ -10,6 +10,13 @@ import { formatTime } from '@/lib/utils'
 // The button was already disabled when no days are selected as of an
 // earlier beta bug-fix pass — that behaviour is unchanged here, still
 // driven by `disabled={saving || selected.length === 0}` below.
+//
+// THIS REVISION (post-beta item #6 — "I'm out this week"): whole-week,
+// non-rescindable opt-out added below the submit button. Always visible,
+// per organiser decision, even when day(s) are already selected — in that
+// case the click first shows an inline confirmation (not a browser
+// confirm()) since selecting it wipes the current selection. See
+// app/api/signup/[token]/opt-out/route.js for the server-side logic.
 
 export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   const safeInitial = Array.isArray(signedUpSessionIds) ? signedUpSessionIds : []
@@ -33,6 +40,12 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   // session's current status, which is outside this file. Flagging rather
   // than silently guessing.
   const [sessionStatuses, setSessionStatuses] = useState({})
+
+  // Post-beta item #6 — "I'm out this week."
+  const [showOptOutConfirm, setShowOptOutConfirm] = useState(false)
+  const [optingOut, setOptingOut] = useState(false)
+  const [optOutError, setOptOutError] = useState(null)
+  const [optedOutResult, setOptedOutResult] = useState(null) // { skippedClosedSessions: [] }
 
   function toggleSession(sessionId) {
     setSelected(prev =>
@@ -116,6 +129,75 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
     } finally {
       setSaving(false)
     }
+  }
+
+  // Post-beta item #6 — "I'm out this week." Called after the inline
+  // confirmation panel is accepted. Non-rescindable: there is no undo
+  // path from this state by design, so no client-side retry-with-change
+  // logic is needed here — only error retry.
+  async function handleOptOutConfirmed() {
+    setOptingOut(true)
+    setOptOutError(null)
+
+    try {
+      const baseUrl = window.location.origin
+      const res = await fetch(`${baseUrl}/api/signup/${player.signup_token}/opt-out`, {
+        method: 'POST',
+      })
+
+      if (!res.ok) {
+        const text = await res.text()
+        console.error('Opt-out failed:', res.status, text)
+        throw new Error('Failed to opt out')
+      }
+
+      const data = await res.json()
+      setOptedOutResult({ skippedClosedSessions: data.skippedClosedSessions ?? [] })
+      setShowOptOutConfirm(false)
+    } catch (err) {
+      console.error('Opt-out error:', err)
+      setOptOutError('Something went wrong. Please try again.')
+    } finally {
+      setOptingOut(false)
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Opted-out final screen. Checked before the `confirmed` screen below
+  // since it can only be reached by explicitly choosing to opt out, and
+  // once here there's no path back to the day-picker in this session.
+  // ------------------------------------------------------------------
+  if (optedOutResult) {
+    return (
+      <div className="text-center py-8">
+        <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M6 6l12 12M18 6L6 18" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
+        <h2 className="text-lg font-medium text-gray-900 mb-1">
+          You're marked as out this week
+        </h2>
+        <p className="text-sm text-gray-500 mb-4">
+          We'll see you next week, {player.first_name}!
+        </p>
+        {optedOutResult.skippedClosedSessions.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-left text-xs text-amber-800 mx-auto max-w-sm">
+            You still have a confirmed spot on{' '}
+            {optedOutResult.skippedClosedSessions.map((d, i) => (
+              <span key={d}>
+                {i > 0 ? ', ' : ''}
+                {new Date(d).toLocaleDateString('en-US', {
+                  weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC'
+                })}
+              </span>
+            ))}
+            {' '}— that session already sent its reminder, so please use the
+            cancel link in that reminder email to remove yourself from it.
+          </div>
+        )}
+      </div>
+    )
   }
 
   if (confirmed) {
@@ -257,6 +339,53 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
       >
         {saving ? 'Submitting...' : 'Submit my days'}
       </button>
+
+      {/*
+        Post-beta item #6 — "I'm out this week." Always available, per
+        organiser decision, even when day(s) are already selected — in
+        that case selecting it wipes the selection, so an inline
+        confirmation is shown first rather than acting immediately.
+      */}
+      <div className="mt-4 text-center">
+        {!showOptOutConfirm ? (
+          <button
+            type="button"
+            onClick={() => setShowOptOutConfirm(true)}
+            className="text-sm text-gray-400 hover:text-gray-600 hover:underline"
+          >
+            I'm out this week
+          </button>
+        ) : (
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-left mt-2">
+            <p className="text-sm text-gray-700 mb-3">
+              {selected.length > 0
+                ? `This will remove your selected day${selected.length > 1 ? 's' : ''} and mark you as out for the whole week. This can't be undone.`
+                : `This will mark you as out for the whole week. This can't be undone.`}
+            </p>
+            {optOutError && (
+              <p className="text-red-600 text-xs mb-3">{optOutError}</p>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowOptOutConfirm(false)}
+                disabled={optingOut}
+                className="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleOptOutConfirmed}
+                disabled={optingOut}
+                className="flex-1 bg-gray-700 text-white py-2 rounded-lg text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+              >
+                {optingOut ? 'Submitting...' : "Yes, I'm out"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -35,6 +35,39 @@ export default async function SignupPage({ params }) {
     .eq('status', 'sent')
     .single()
 
+  // Post-beta item #6 — "I'm out this week." Whole-week, non-rescindable
+  // opt-out. If this player already opted out of the current signup week,
+  // short-circuit straight to a static message — no day-picker, no undo.
+  // See app/api/signup/[token]/opt-out/route.js for the write path.
+  let optedOut = false
+  if (currentWeek) {
+    const { data: optOutRow } = await supabase
+      .from('weekly_opt_outs')
+      .select('id')
+      .eq('player_id', player.id)
+      .eq('week_id', currentWeek.id)
+      .maybeSingle()
+    optedOut = !!optOutRow
+  }
+
+  if (optedOut) {
+    return (
+      <div className="max-w-md mx-auto p-6 text-center">
+        <h1 className="text-2xl font-semibold text-gray-900 mb-1">
+          Hi, {player.first_name}!
+        </h1>
+        <p className="text-sm text-gray-500 mt-6">
+          You're marked as out this week. We'll see you next week!
+        </p>
+        <div className="mt-8 pt-4 border-t border-gray-100 text-center">
+          <a href={`/contact/${token}`} className="text-xs text-gray-400 hover:text-gray-600">
+            Having trouble with this page? Let us know
+          </a>
+        </div>
+      </div>
+    )
+  }
+
   const openSessions = []
 
   if (currentWeek) {

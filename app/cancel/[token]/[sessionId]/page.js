@@ -5,16 +5,25 @@ import { formatTime } from '@/lib/utils'
 export default async function CancelPage({ params }) {
   const { token, sessionId } = await params
 
+  // BUG FIX (this revision): this query previously matched on signup_token
+  // alone, with no active check — the same gap that was fixed on the
+  // signup page in post-beta item #11. Adding .eq('active', true) closes
+  // it here too: a deactivated player's old cancellation link no longer
+  // resolves to a valid player record.
   const { data: player, error: playerError } = await supabase
     .from('players')
     .select('id, first_name')
     .eq('signup_token', token)
+    .eq('active', true)
     .single()
 
   if (playerError || !player) {
     return (
       <div className="max-w-md mx-auto p-8 text-center">
-        <p className="text-gray-500">This cancellation link is invalid.</p>
+        <p className="text-gray-500 mb-4">This cancellation link is invalid.</p>
+        <a href="/contact" className="text-sm text-blue-600 hover:underline">
+          Need help? Contact us
+        </a>
       </div>
     )
   }
@@ -89,6 +98,13 @@ export default async function CancelPage({ params }) {
         signupToken={token}
         willLeaveShort={willLeaveShort}
       />
+
+      {/* Post-beta item #9 — player-to-organizer messaging footer link. */}
+      <div className="mt-8 pt-4 border-t border-gray-100 text-center">
+        <a href={`/contact/${token}`} className="text-xs text-gray-400 hover:text-gray-600">
+          Having trouble with this page? Let us know
+        </a>
+      </div>
     </div>
   )
 }

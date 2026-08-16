@@ -4,14 +4,9 @@ import SignupForm from './SignupForm'
 export default async function SignupPage({ params }) {
   const { token } = params
 
-  // BUG FIX (Aug 2026): previously this query matched on signup_token alone,
-  // with no check that the player is still active. That meant a deactivated
-  // player's old signup link would keep working forever -- they could still
-  // see open sessions and sign up for them. Adding .eq('active', true) closes
-  // that gap. A deactivated player's token now falls through to the same
-  // "invalid or expired" message as a bad/unknown token below -- we don't
-  // want to reveal to a deactivated player specifically *why* their link
-  // stopped working, just that it did.
+  // BUG FIX (post-beta item #11): .eq('active', true) added so a
+  // deactivated player's old signup link no longer resolves to a valid
+  // player record. See item #11 discussion for the full history.
   const { data: player, error: playerError } = await supabase
     .from('players')
     .select('id, first_name, last_name, signup_token')
@@ -22,7 +17,10 @@ export default async function SignupPage({ params }) {
   if (playerError || !player) {
     return (
       <div className="max-w-md mx-auto p-8 text-center">
-        <p className="text-gray-500">This signup link is invalid or has expired.</p>
+        <p className="text-gray-500 mb-4">This signup link is invalid or has expired.</p>
+        <a href="/contact" className="text-sm text-blue-600 hover:underline">
+          Need help? Contact us
+        </a>
       </div>
     )
   }
@@ -78,6 +76,13 @@ export default async function SignupPage({ params }) {
         sessions={openSessions}
         signedUpSessionIds={signedUpSessionIds}
       />
+
+      {/* Post-beta item #9 — player-to-organizer messaging footer link. */}
+      <div className="mt-8 pt-4 border-t border-gray-100 text-center">
+        <a href={`/contact/${token}`} className="text-xs text-gray-400 hover:text-gray-600">
+          Having trouble with this page? Let us know
+        </a>
+      </div>
     </div>
   )
 }

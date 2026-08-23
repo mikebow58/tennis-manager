@@ -14,15 +14,6 @@ export default async function SignupPage({ params }) {
     .eq('active', true)
     .single()
 
-  console.error('SIGNUP DEBUG:', {
-    tokenPrefix: token?.slice(0, 8),
-    hasError: !!playerError,
-    errorMessage: playerError?.message,
-    errorCode: playerError?.code,
-    foundPlayer: !!player,
-    urlBaked: process.env.NEXT_PUBLIC_SUPABASE_URL,
-  })
-
   if (playerError || !player) {
     return (
       <div className="max-w-md mx-auto p-8 text-center">

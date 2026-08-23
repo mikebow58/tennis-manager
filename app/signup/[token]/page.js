@@ -2,7 +2,7 @@ import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import SignupForm from './SignupForm'
 
 export default async function SignupPage({ params }) {
-  const { token } = params
+  const { token } = await params
 
   // BUG FIX (post-beta item #11): .eq('active', true) added so a
   // deactivated player's old signup link no longer resolves to a valid

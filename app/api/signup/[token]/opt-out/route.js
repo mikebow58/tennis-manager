@@ -30,6 +30,18 @@
  *   - Mixed open/closed sessions within the same week are handled by
  *     splitting delete-vs-skip above, rather than running the full
  *     post-close cancellation flow from this route.
+ *
+ * BUG FIX (dev session Aug 25, 2026): the currentWeek query previously used
+ * .eq('status', 'sent').single(), which assumes at most one week is ever
+ * 'sent' at a time. That assumption is false by design — a new week's
+ * signup send goes out Friday while the current week's sessions are still
+ * running through Saturday, so two weeks are legitimately 'sent'
+ * simultaneously for a multi-day window every single week. .single() throws
+ * (PGRST116) whenever more than one row matches, which meant every opt-out
+ * request during that overlap window was incorrectly rejected with "No
+ * signup window is currently open." Fixed by ordering on week_start_date
+ * descending and taking the most recent match via .maybeSingle() — same
+ * fix applied to app/signup/[token]/page.js the same session.
  */
 
 import { NextResponse } from 'next/server'
@@ -60,13 +72,16 @@ export async function POST(request, { params }) {
   // Find the current signup week. Opting out only makes sense against a
   // week that is currently open for signup (status = 'sent') — mirrors
   // the same condition the signup page itself uses to decide whether to
-  // render the day-picker at all.
+  // render the day-picker at all. Most recently sent week wins when more
+  // than one is 'sent' simultaneously (see bug fix note above).
   // ------------------------------------------------------------------
   const { data: currentWeek, error: weekError } = await supabaseAdmin
     .from('weeks')
     .select('id')
     .eq('status', 'sent')
-    .single()
+    .order('week_start_date', { ascending: false })
+    .limit(1)
+    .maybeSingle()
 
   if (weekError || !currentWeek) {
     console.log(`[opt-out] No week in 'sent' status. Nothing to opt out of.`)

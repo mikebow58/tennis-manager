@@ -1,3 +1,18 @@
+// BUG FIX (dev session Aug 25, 2026): the currentWeek query previously used
+// .eq('status', 'sent').single(), which assumes at most one week is ever in
+// 'sent' status at a time. That assumption is false by design — a new
+// week's signup send goes out Friday while the current week's sessions are
+// still running through Saturday, meaning two weeks are legitimately
+// 'sent' simultaneously for a multi-day window every single week. .single()
+// throws (PGRST116) whenever more than one row matches, which silently
+// dropped currentWeek to null and broke this entire page.
+//
+// Fix: order by week_start_date descending and take the most recent match
+// via .maybeSingle() (not .single()) so the newest sent week is always the
+// one used, and a genuine zero-match case fails gracefully instead of
+// throwing. See Phase 3 Group 6 (Signup Link Security and Session
+// Visibility) for the underlying rule this page enforces.
+
 import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import SignupForm from './SignupForm'
 
@@ -33,7 +48,9 @@ export default async function SignupPage({ params }) {
     .from('weeks')
     .select('id')
     .eq('status', 'sent')
-    .single()
+    .order('week_start_date', { ascending: false })
+    .limit(1)
+    .maybeSingle()
 
   // Post-beta item #6 — "I'm out this week." Whole-week, non-rescindable
   // opt-out. If this player already opted out of the current signup week,

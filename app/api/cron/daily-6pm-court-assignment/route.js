@@ -62,7 +62,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendCourtAssignmentReview } from '@/lib/email'
 import { runProcedure2 } from '@/lib/court-assignment'
-import { formatDeadlineTime } from '@/lib/utils'
+import { formatDeadlineTime, getSkillLabel } from '@/lib/utils'
 import { getAdminEmail } from '@/lib/admin-settings'
 import { getSessionRosterCondition } from '@/lib/session-capacity'
 
@@ -316,7 +316,7 @@ if (isFull && !session.court_assignment_notified_at) {
         const playerNames = court.players
           .map((p) => `${p.firstName} ${p.lastName}`)
           .join(', ')
-        const skillRange = `${Math.min(...court.players.map((p) => p.skill))}–${Math.max(...court.players.map((p) => p.skill))}`
+        const skillRange = `${getSkillLabel(Math.min(...court.players.map((p) => p.skill)))}–${getSkillLabel(Math.max(...court.players.map((p) => p.skill)))}`
         const locationSuffix = p2Result.isMultiLocation ? ` · ${court.locationName}` : ''
         courtSummaryLines.push(
           `Court ${court.courtLetter}${locationSuffix}: ${playerNames} (skill ${skillRange})`

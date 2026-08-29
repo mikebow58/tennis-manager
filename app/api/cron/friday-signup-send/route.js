@@ -23,16 +23,22 @@
  * Tables read: weeks, players
  * Tables written: weeks
  *
- * BUG FIX (dev session Aug 25, 2026): "upcoming Monday" was previously
- * computed as a hardcoded `today + 3 days` — correct only when this cron
- * actually runs on a Friday (the only day Vercel's real schedule ever
- * triggers it). Manually triggering it on any other day during dev testing
- * produced a wrong date (e.g. run on a Saturday, +3 days lands on the
- * following Tuesday, not the real upcoming Monday), causing a false
- * "no_week_found" result even though the correct week existed. Fixed with
- * a real day-of-week-aware calculation so this cron can be manually
- * triggered correctly on any day, not just Friday. Production behavior is
- * unchanged, since the real schedule only ever invokes it on a Friday.
+ * BUG FIX (dev session Aug 25, 2026, part 1): "upcoming Monday" was
+ * previously computed as a hardcoded `today + 3 days` — correct only when
+ * this cron actually runs on a Friday (the only day Vercel's real schedule
+ * ever triggers it). Manually triggering it on any other day during dev
+ * testing produced a wrong date, causing a false "no_week_found" result
+ * even though the correct week existed. Fixed with a real day-of-week-aware
+ * calculation so this cron can be manually triggered correctly on any day,
+ * not just Friday. Production behavior is unchanged, since the real
+ * schedule only ever invokes it on a Friday.
+ *
+ * BUG FIX (dev session Aug 25, 2026, part 2): every response branch
+ * computed (or could compute) elapsed duration and logged it via
+ * console.log, but never included it in the returned JSON — meaning
+ * timing data required digging into Vercel function logs instead of just
+ * reading the curl output, unlike every other cron file in this codebase.
+ * elapsedMs now included in every response for consistency.
  *
  * NOTE: like the original code, this still uses raw UTC date arithmetic
  * rather than the Mountain-Time-safe Intl.DateTimeFormat pattern used
@@ -103,8 +109,10 @@ export async function GET(request) {
   if (!week) {
     // No week exists for upcoming Monday. This should not happen in normal
     // operation (monday_week_creation always creates it), but handle gracefully.
+    const elapsed = Date.now() - startTime
     console.log('[friday-signup-send] No week found for', upcomingMondayStr, '— nothing to do. Exiting.')
-    return new Response(JSON.stringify({ status: 'no_week_found', weekDate: upcomingMondayStr }), {
+    console.log(`[friday-signup-send] Completed in ${elapsed}ms`)
+    return new Response(JSON.stringify({ status: 'no_week_found', weekDate: upcomingMondayStr, elapsedMs: elapsed }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
@@ -134,7 +142,7 @@ export async function GET(request) {
     console.log('[friday-signup-send] Week already in sent status — manual send preceded cron. No action. Exiting.')
     const elapsed = Date.now() - startTime
     console.log(`[friday-signup-send] Completed in ${elapsed}ms`)
-    return new Response(JSON.stringify({ status: 'already_sent', weekId: week.id }), {
+    return new Response(JSON.stringify({ status: 'already_sent', weekId: week.id, elapsedMs: elapsed }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
@@ -168,7 +176,7 @@ export async function GET(request) {
     console.log('[friday-signup-send] Skip notification sent to organiser successfully.')
     const elapsed = Date.now() - startTime
     console.log(`[friday-signup-send] Completed in ${elapsed}ms`)
-    return new Response(JSON.stringify({ status: 'skipped_pending_approval', weekId: week.id }), {
+    return new Response(JSON.stringify({ status: 'skipped_pending_approval', weekId: week.id, elapsedMs: elapsed }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
@@ -196,8 +204,10 @@ export async function GET(request) {
 
     if (players.length === 0) {
       // No active players — unusual but not an error. Log and exit.
+      const elapsed = Date.now() - startTime
       console.warn('[friday-signup-send] No active players found — nothing to send.')
-      return new Response(JSON.stringify({ status: 'no_active_players', weekId: week.id }), {
+      console.log(`[friday-signup-send] Completed in ${elapsed}ms`)
+      return new Response(JSON.stringify({ status: 'no_active_players', weekId: week.id, elapsedMs: elapsed }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
@@ -271,6 +281,7 @@ export async function GET(request) {
         playerCount: players.length,
         emailsSent: sent,
         emailsFailed: failed,
+        elapsedMs: elapsed,
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     )
@@ -280,10 +291,10 @@ export async function GET(request) {
   // Fallback: week exists but has an unexpected status value.
   // This should never happen in normal operation. Log and exit.
   // ------------------------------------------------------------------
-  console.warn('[friday-signup-send] Week found with unexpected status:', week.status, '— no action taken.')
   const elapsed = Date.now() - startTime
+  console.warn('[friday-signup-send] Week found with unexpected status:', week.status, '— no action taken.')
   console.log(`[friday-signup-send] Completed in ${elapsed}ms`)
-  return new Response(JSON.stringify({ status: 'unexpected_week_status', weekStatus: week.status }), {
+  return new Response(JSON.stringify({ status: 'unexpected_week_status', weekStatus: week.status, elapsedMs: elapsed }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })

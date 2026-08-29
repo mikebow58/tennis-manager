@@ -22,6 +22,23 @@
  *
  * Tables read: weeks, players
  * Tables written: weeks
+ *
+ * BUG FIX (dev session Aug 25, 2026): "upcoming Monday" was previously
+ * computed as a hardcoded `today + 3 days` — correct only when this cron
+ * actually runs on a Friday (the only day Vercel's real schedule ever
+ * triggers it). Manually triggering it on any other day during dev testing
+ * produced a wrong date (e.g. run on a Saturday, +3 days lands on the
+ * following Tuesday, not the real upcoming Monday), causing a false
+ * "no_week_found" result even though the correct week existed. Fixed with
+ * a real day-of-week-aware calculation so this cron can be manually
+ * triggered correctly on any day, not just Friday. Production behavior is
+ * unchanged, since the real schedule only ever invokes it on a Friday.
+ *
+ * NOTE: like the original code, this still uses raw UTC date arithmetic
+ * rather than the Mountain-Time-safe Intl.DateTimeFormat pattern used
+ * elsewhere in the codebase (e.g. daily-8am's toMountainDateStr). Low risk
+ * here specifically since 9:30am Mountain is nowhere near UTC midnight
+ * rollover, but flagged for consistency if this file is touched again.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -48,16 +65,19 @@ export async function GET(request) {
   }
 
   // ------------------------------------------------------------------
-  // Step 1: Calculate upcoming Monday's date.
-  // The cron fires on Friday. "Upcoming Monday" means the Monday of the
-  // week immediately following this Friday — i.e. 3 days from now.
-  // All date logic is performed in UTC to match Supabase's stored values.
-  // week_start_date is stored as a date-only string: 'YYYY-MM-DD'.
+  // Step 1: Calculate the upcoming Monday's date — the next Monday from
+  // today, always looking forward (never today itself, even if today
+  // happens to be a Monday — this cron always targets a week that hasn't
+  // started yet). All date logic is performed in UTC to match Supabase's
+  // stored values. week_start_date is stored as a date-only string:
+  // 'YYYY-MM-DD'.
   // ------------------------------------------------------------------
   const today = new Date()
+  const dayOfWeek = today.getUTCDay() // 0=Sun, 1=Mon, ..., 6=Sat
 
-  // Friday = day 5. Monday = day 1. Days until next Monday = 3.
-  const daysUntilMonday = 3
+  let daysUntilMonday = (8 - dayOfWeek) % 7
+  if (daysUntilMonday === 0) daysUntilMonday = 7 // today is Monday — target next week's Monday, not today
+
   const upcomingMonday = new Date(today)
   upcomingMonday.setUTCDate(today.getUTCDate() + daysUntilMonday)
 

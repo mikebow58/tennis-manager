@@ -2,8 +2,67 @@ import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import Link from 'next/link'
 import SendSignupButton from './SendSignupButton'
 import { formatTime, isSessionCompleted } from '@/lib/utils'
+import { getCapacityTrigger } from '@/lib/session-capacity'
 
 export const dynamic = 'force-dynamic'
+
+// BUG FIX (dev session Aug 25, 2026): two separate issues fixed here.
+//
+// 1. The old code blended confirmed + tentative + waitlisted into one
+//    count and ran a single `count % 4` check against it. A full session
+//    with a waitlist (e.g. 24 confirmed + 1 waitlisted = 25) showed as
+//    "3 short" — the opposite of reality. Waitlisted players represent
+//    over-capacity, not an incomplete court, and must never factor into
+//    full/short at all (Phase 2 §5.1 — waitlist_mode is full AND
+//    waitlisted > 0, not a variant of short).
+//
+// 2. Separately, the old "isFull" check was `count % 4 === 0` with no
+//    reference to actual capacity — a session with 6 courts available
+//    (capacity 24) would show "Full" at just 4 confirmed players. Now
+//    uses getCapacityTrigger (courts_available, or anticipated_courts for
+//    Mon/Tue) for a real capacity-based Full determination, matching
+//    Phase 2 §5.2/5.6.
+//
+// Pre-close (session.status === 'open') and post-close (status === 'closed')
+// short are different concepts per Phase 2 §5.4 and are now computed
+// separately: pre-close short is driven by confirmed count against
+// capacity; post-close short is driven by tentative count, since Procedure
+// 1/2 has already run and settled who's on a complete vs incomplete court.
+function computeSessionDisplay(session, confirmedCount, tentativeCount, waitlistedCount) {
+  if (session.status === 'closed') {
+    const totalSignedUp = confirmedCount + tentativeCount
+    const isEmpty = totalSignedUp === 0
+    const isFull = !isEmpty && tentativeCount === 0
+    const isShort = !isFull && !isEmpty
+    const spotsNeeded = isShort ? ((4 - (tentativeCount % 4)) % 4 || 4) : 0
+    return {
+      isFull,
+      isShort,
+      isEmpty,
+      spotsNeeded,
+      totalSignedUp,
+      waitlistedCount,
+      emptyLabel: 'No signups',
+    }
+  }
+
+  // Pre-close (session.status === 'open').
+  const { capacityTrigger } = getCapacityTrigger(session)
+  const isEmpty = confirmedCount === 0
+  const isFull = !isEmpty && confirmedCount >= capacityTrigger
+  const hasPartialCourt = confirmedCount % 4 !== 0
+  const isShort = !isFull && !isEmpty && hasPartialCourt
+  const spotsNeeded = isShort ? (4 - (confirmedCount % 4)) : 0
+  return {
+    isFull,
+    isShort,
+    isEmpty,
+    spotsNeeded,
+    totalSignedUp: confirmedCount,
+    waitlistedCount,
+    emptyLabel: 'Open',
+  }
+}
 
 export default async function Dashboard({ searchParams }) {
   const sp = await searchParams
@@ -93,7 +152,11 @@ export default async function Dashboard({ searchParams }) {
       .sort((a, b) => a.first_name.localeCompare(b.first_name))
   }
 
-  let availabilityCounts = {}
+  // Three separate tallies instead of one blended count — see bug fix
+  // note above computeSessionDisplay.
+  const confirmedCounts = {}
+  const tentativeCounts = {}
+  const waitlistedCounts = {}
   const playersWithSignup = new Set()
   let cancellationCount = 0
 
@@ -107,9 +170,15 @@ export default async function Dashboard({ searchParams }) {
       availability.forEach(({ session_id, player_id, status }) => {
         if (status === 'cancelled') {
           cancellationCount++
-        } else {
-          availabilityCounts[session_id] = (availabilityCounts[session_id] || 0) + 1
-          playersWithSignup.add(player_id)
+          return
+        }
+        playersWithSignup.add(player_id)
+        if (status === 'confirmed') {
+          confirmedCounts[session_id] = (confirmedCounts[session_id] || 0) + 1
+        } else if (status === 'tentative') {
+          tentativeCounts[session_id] = (tentativeCounts[session_id] || 0) + 1
+        } else if (status === 'waitlisted') {
+          waitlistedCounts[session_id] = (waitlistedCounts[session_id] || 0) + 1
         }
       })
     }
@@ -123,13 +192,19 @@ export default async function Dashboard({ searchParams }) {
   const totalPlayers = allPlayers?.length || 0
 
   // Cancelled sessions are excluded from the "courts short" metric — a
-  // cancelled session isn't short, it's cancelled. See the new Cancelled
-  // day-card state below for how these render instead.
+  // cancelled session isn't short, it's cancelled. Uses the same corrected
+  // computeSessionDisplay logic as the day cards below, rather than a
+  // separate ad hoc calculation.
   const shortCount = sessions.filter(s => {
     if (s.cancelled_at) return false
     if (isSessionCompleted(s.session_date)) return false
-    const count = availabilityCounts[s.id] || 0
-    return count === 0 || count % 4 !== 0
+    const info = computeSessionDisplay(
+      s,
+      confirmedCounts[s.id] || 0,
+      tentativeCounts[s.id] || 0,
+      waitlistedCounts[s.id] || 0
+    )
+    return info.isShort || info.isEmpty
   }).length
 
   const weekLabel = week
@@ -221,11 +296,18 @@ export default async function Dashboard({ searchParams }) {
           <div className="px-4 md:px-8 pt-4 pb-6 max-w-5xl mx-auto">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
               {sessions.map((session) => {
-                const count = availabilityCounts[session.id] || 0
+                const confirmedCount = confirmedCounts[session.id] || 0
+                const tentativeCount = tentativeCounts[session.id] || 0
+                const waitlistedCount = waitlistedCounts[session.id] || 0
                 const completed = isSessionCompleted(session.session_date)
-                const isFull = !completed && count > 0 && count % 4 === 0
-                const isEmpty = count === 0
-                const isShort = !isFull && !completed
+
+                const info = computeSessionDisplay(
+                  session,
+                  confirmedCount,
+                  tentativeCount,
+                  waitlistedCount
+                )
+                const { isFull, isShort, isEmpty, spotsNeeded, totalSignedUp, emptyLabel } = info
 
                 const dateLabel = new Date(session.session_date).toLocaleDateString('en-US', {
                   weekday: 'long',
@@ -238,8 +320,6 @@ export default async function Dashboard({ searchParams }) {
                 const courtsAvailable = session.courts_available ?? '?'
                 // V2: location name from join.
                 const locationName = session.locations?.name ?? '—'
-
-                const spotsNeeded = isFull ? 0 : (Math.ceil(count / 4) * 4) - count
 
                 // Organizer-only note (organiser_notes column) — internal
                 // context for the organizer, never sent to players.
@@ -263,12 +343,12 @@ export default async function Dashboard({ searchParams }) {
                       </div>
                       {session.cancellation_note && (
                         <div className="text-xs text-red-700 italic mb-3 border-t border-red-200 pt-2">
-                          “{session.cancellation_note}”
+                          "{session.cancellation_note}"
                         </div>
                       )}
                       <div className="flex justify-between items-center">
                         <span className="text-xs text-red-400">
-                          {count} player{count !== 1 ? 's' : ''}
+                          {totalSignedUp} player{totalSignedUp !== 1 ? 's' : ''}
                         </span>
                         <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-600 text-white">
                           Cancelled
@@ -295,7 +375,7 @@ export default async function Dashboard({ searchParams }) {
                       )}
                       <div className="flex justify-between items-center">
                         <span className="text-xs text-gray-400">
-                          {count} player{count !== 1 ? 's' : ''}
+                          {totalSignedUp} player{totalSignedUp !== 1 ? 's' : ''}
                         </span>
                         <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-200 text-gray-500">
                           Completed
@@ -312,7 +392,7 @@ export default async function Dashboard({ searchParams }) {
                     className={`block rounded-xl p-4 transition-opacity hover:opacity-90 ${
                       isFull
                         ? 'bg-green-50 border border-green-200'
-                        : isShort && !isEmpty
+                        : isShort
                         ? 'bg-amber-50 border border-amber-200'
                         : 'bg-white border border-gray-200'
                     }`}
@@ -320,7 +400,7 @@ export default async function Dashboard({ searchParams }) {
                     <div className={`text-sm font-medium mb-1 ${
                       isFull
                         ? 'text-green-900'
-                        : isShort && !isEmpty
+                        : isShort
                         ? 'text-amber-900'
                         : 'text-gray-900'
                     }`}>
@@ -338,18 +418,26 @@ export default async function Dashboard({ searchParams }) {
                       <span className="text-xs text-gray-400">
                         {isEmpty
                           ? `${courtsAvailable} ${courtsAvailable === 1 ? 'court' : 'courts'}`
-                          : `${count} player${count !== 1 ? 's' : ''} · ${courtsAvailable} ${courtsAvailable === 1 ? 'court' : 'courts'}`}
+                          : `${totalSignedUp} player${totalSignedUp !== 1 ? 's' : ''} · ${courtsAvailable} ${courtsAvailable === 1 ? 'court' : 'courts'}`}
                       </span>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                         isFull
                           ? 'bg-green-600 text-white'
-                          : isShort && !isEmpty
+                          : isShort
                           ? 'bg-amber-500 text-white'
                           : 'bg-gray-500 text-white'
                       }`}>
-                        {isFull ? 'Full' : isEmpty ? 'Open' : `${spotsNeeded} short`}
+                        {isFull ? 'Full' : isEmpty ? emptyLabel : isShort ? `${spotsNeeded} short` : 'Open'}
                       </span>
                     </div>
+                    {/* Design decision (Aug 25, 2026 session): Full + waitlist
+                        shown as small supplementary text under the badge,
+                        rather than replacing the badge or adding a second one. */}
+                    {isFull && waitlistedCount > 0 && (
+                      <div className="text-xs text-blue-500 mt-1 text-right">
+                        +{waitlistedCount} waitlisted
+                      </div>
+                    )}
                   </Link>
                 )
               })}

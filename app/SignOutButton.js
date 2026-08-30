@@ -19,6 +19,7 @@ export default function SignOutButton() {
     pathname.startsWith('/signup') ||
     pathname.startsWith('/cancel') ||
     pathname.startsWith('/subs') ||
+    pathname.startsWith('/contact') ||
     pathname.startsWith('/login')
 
   if (isPublicRoute) return null

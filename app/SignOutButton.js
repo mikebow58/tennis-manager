@@ -7,9 +7,18 @@ export default function SignOutButton() {
   const router = useRouter()
   const pathname = usePathname()
 
+  // Public (player-facing) route prefixes — admin nav must never render here.
+  // BUG FIX (Aug 30, 2026 session): '/subs' was missing, so the confirm/
+  // decline page (/subs/respond) was rendering the admin nav bar to
+  // players. Add any new player-facing route prefix here AND to
+  // isPublicRoute in lib/supabase-middleware.js — two separate allowlists,
+  // both must be updated together.
+  // NOTE: '/portal' is not yet added — the Player Portal (Project Summary
+  // §8.8) doesn't exist yet. Add it here when that page is built.
   const isPublicRoute =
     pathname.startsWith('/signup') ||
     pathname.startsWith('/cancel') ||
+    pathname.startsWith('/subs') ||
     pathname.startsWith('/login')
 
   if (isPublicRoute) return null

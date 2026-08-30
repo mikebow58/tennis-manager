@@ -28,13 +28,35 @@ export const dynamic = 'force-dynamic'
 // separately: pre-close short is driven by confirmed count against
 // capacity; post-close short is driven by tentative count, since Procedure
 // 1/2 has already run and settled who's on a complete vs incomplete court.
+//
+// BUG FIX (dev session Aug 30, 2026): the post-close branch below was
+// still deriving isFull/isShort/spotsNeeded from tentativeCount alone.
+// That relied on an invariant that no longer holds: confirmedCount was
+// always a multiple of 4 until Procedure 2 reran (Procedure 1 guarantees
+// this), so tentativeCount % 4 and (confirmedCount + tentativeCount) % 4
+// always agreed — the two formulas were indistinguishable in practice.
+// The sub-request confirm/decline flow (built July 2026, /subs/respond ->
+// claim_sub_request()) breaks that invariant: a responding player is
+// INSERTed directly as 'confirmed' (Phase 3 Group 3) without any
+// corresponding update to the existing tentative players' status — that
+// reclassification only happens when Procedure 2 reruns (session reaches
+// full status, or the 6pm deadline). A partial fill-in (e.g. 1 of 2 needed
+// spots filled) leaves confirmedCount no longer a multiple of 4 while
+// tentativeCount stays frozen in the DB at its Procedure-1 value — so the
+// old formula kept reporting the ORIGINAL shortfall instead of the
+// remaining one. Now derived from totalSignedUp instead, which stays
+// correct regardless of when Procedure 2 next runs. This also matches
+// what the session detail page was already doing correctly.
 function computeSessionDisplay(session, confirmedCount, tentativeCount, waitlistedCount) {
   if (session.status === 'closed') {
     const totalSignedUp = confirmedCount + tentativeCount
     const isEmpty = totalSignedUp === 0
-    const isFull = !isEmpty && tentativeCount === 0
+    const isFull = !isEmpty && totalSignedUp % 4 === 0
     const isShort = !isFull && !isEmpty
-    const spotsNeeded = isShort ? ((4 - (tentativeCount % 4)) % 4 || 4) : 0
+    // No extra `|| 4` safety wrap needed here: isShort already excludes
+    // the totalSignedUp % 4 === 0 case (that's isFull), so this is always
+    // 1, 2, or 3 when isShort is true — never 0.
+    const spotsNeeded = isShort ? (4 - (totalSignedUp % 4)) : 0
     return {
       isFull,
       isShort,

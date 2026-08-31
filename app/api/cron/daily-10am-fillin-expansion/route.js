@@ -14,7 +14,7 @@
  * If the all-available pool (match-type-compatible) is empty, expands
  * further to include players regardless of match type preference.
  *
- * FIX (this revision): previously filtered candidate sub_requests to
+ * FIX (Aug 25 session): previously filtered candidate sub_requests to
  * sessions.session_date = tomorrow. That assumption held when the only
  * source of first_call requests was the old daily-8am Check A, which
  * only ever (attempted to) fire for Wed–Sat sessions dated tomorrow.
@@ -34,11 +34,36 @@
  * skill-exclusion day labels and email date labels) but no longer used
  * as a query filter.
  *
- * Decision tree (Phase 1 Section 4.6, as amended by this fix):
+ * FIX (Sept 1 session — found live during the two-week cron load test):
+ * Step 2's fullness check queried only status = 'confirmed' availability
+ * rows and tested confirmedCount % 4 !== 0. That is the PRE-CLOSE short
+ * definition (Phase 2 Section 5.4) and is wrong here — this cron only
+ * ever runs post-close (after Procedure 1 has already split the roster
+ * into confirmed/tentative). The correct post-close short check is
+ * COUNT(availability WHERE court_assignment_status = 'tentative') > 0,
+ * i.e. whether any tentative players remain — equivalently, whether
+ * confirmed + tentative together fail to divide evenly into courts of 4.
+ * The old check produced a false "session is full" whenever confirmedCount
+ * alone happened to be a clean multiple of 4, silently ignoring any
+ * leftover tentative players. This is exactly the shape Procedure 1
+ * produces whenever the pre-close signup count wasn't itself a multiple
+ * of 4 — a common case, not an edge case. Confirmed live: session 70
+ * (21 signups → 20 confirmed + 1 tentative) was incorrectly reported as
+ * "already full" and received no all-available expansion.
+ *
+ * Fixed by querying availability WHERE status IN ('confirmed','tentative')
+ * — i.e. all signed-up players, matching Automation Logic Section 10
+ * Step 4's "roster average of signed-up players" — and checking
+ * totalSignedUp % 4 !== 0. This also fixes the roster-skill average used
+ * to compute the targeting skill range, which previously excluded
+ * tentative players' skill levels entirely.
+ *
+ * Decision tree (Phase 1 Section 4.6, as amended by both fixes above):
  *   1. Query sub_requests WHERE request_type = 'first_call'
  *      AND status = 'active' AND DATE(sent_at) = today.
  *   2. If 0 rows: no fill-in sent this morning — exit.
- *   3. For each: check if session is now full.
+ *   3. For each: fetch confirmed + tentative availability. Check if
+ *      totalSignedUp % 4 = 0 (session is now full).
  *   4. If full: no action.
  *   5. If still short: build all-available targeting pool (using this
  *      session's own day-of-week label, not a global "tomorrow"),
@@ -48,9 +73,10 @@
  *
  * References:
  *   Phase 1 Section 4.6 — daily_10am_fillin_expansion
- *   Automation Logic Section 6.1
+ *   Phase 2 Section 5.4 — Pre-Close vs Post-Close Short
+ *   Automation Logic Section 6.1, Section 10 Step 4
  *   See daily-8am/route.js header comment for the full Check A retirement
- *   explanation and the known-gap note that led to this fix.
+ *   explanation and the known-gap note that led to the first fix above.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -163,27 +189,37 @@ export async function GET(request) {
 
       // ----------------------------------------------------------------
       // Step 2: Check if session is now full.
+      //
+      // FIX (Sept 1): fetch confirmed AND tentative availability, not
+      // confirmed only. Post-close fullness must account for tentative
+      // players still sitting on an incomplete court (Phase 2 Section
+      // 5.4) — confirmedCount alone can be a clean multiple of 4 while
+      // tentative players remain unfilled, which was silently treated
+      // as "full" under the old confirmed-only check.
       // ----------------------------------------------------------------
-      const { data: confirmedAvail, error: confirmedError } = await supabaseAdmin
+      const { data: signedUpAvail, error: signedUpError } = await supabaseAdmin
         .from('availability')
-        .select('player_id, players ( skill_admin, skill_self )')
+        .select('player_id, status, players ( skill_admin, skill_self )')
         .eq('session_id', session.id)
-        .eq('status', 'confirmed')
+        .in('status', ['confirmed', 'tentative'])
 
-      if (confirmedError) {
+      if (signedUpError) {
         console.error(
           `[daily-10am-fillin-expansion] Error fetching availability for session ${session.id}:`,
-          confirmedError.message
+          signedUpError.message
         )
         continue
       }
 
-      const confirmedCount = confirmedAvail.length
-      const isShort = confirmedCount % 4 !== 0
+      const confirmedAvail = signedUpAvail.filter((a) => a.status === 'confirmed')
+      const tentativeAvail = signedUpAvail.filter((a) => a.status === 'tentative')
+      const totalSignedUp = signedUpAvail.length
+      const isShort = totalSignedUp % 4 !== 0
 
       console.log(
         `[daily-10am-fillin-expansion] Session ${session.id} (${session.session_date}) — ` +
-        `confirmedCount=${confirmedCount} isShort=${isShort}`
+        `confirmedCount=${confirmedAvail.length} tentativeCount=${tentativeAvail.length} ` +
+        `totalSignedUp=${totalSignedUp} isShort=${isShort}`
       )
 
       if (!isShort) {
@@ -196,8 +232,13 @@ export async function GET(request) {
 
       // ----------------------------------------------------------------
       // Step 3: Build all-available targeting pool.
+      //
+      // FIX (Sept 1): roster skill average is now computed from all
+      // signed-up players (confirmed + tentative), matching Automation
+      // Logic Section 10 Step 4 ("roster average of signed-up players"),
+      // not confirmed players only.
       // ----------------------------------------------------------------
-      const rosterSkills = confirmedAvail.map((a) => resolveSkill(a.players))
+      const rosterSkills = signedUpAvail.map((a) => resolveSkill(a.players))
       const sessionMatchType = session.match_type ?? 'doubles'
       const locationName = session.locations?.name ?? 'TBD'
 

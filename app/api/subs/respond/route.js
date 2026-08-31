@@ -6,6 +6,15 @@
 // non-silently-demoted tentative players and one organiser notice.
 // Always redirects back to the GET page (POST/redirect/GET), which
 // re-renders from fresh DB state.
+//
+// BUG FIX (Gap 3, Aug 30 2026 session): added handling for the new
+// SUCCESS_WAITLISTED outcome (see migration
+// 20260830160000_fix_claim_sub_request_late_arrival_waitlist.sql). A late
+// respondent is now silently placed on the waitlist by claim_sub_request()
+// instead of being told the spot was already filled — this branch sends
+// them the corresponding waitlist-confirmation email. No organiser email
+// is sent for this event; the docs don't call for one, and the roster
+// itself hasn't changed as a result of a late/waitlisted response.
 
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -13,6 +22,7 @@ import { getAdminEmail } from '@/lib/admin-settings'
 import {
   sendTentativePromotedToConfirmed,
   sendSubRequestResolvedNotice,
+  sendAddedToWaitlistNotice,
 } from '@/lib/email'
 
 export async function POST(request) {
@@ -96,6 +106,44 @@ export async function POST(request) {
       }).catch((err) => {
         console.error('[api/subs/respond] organiser resolved-notice email failed:', err)
       })
+    }
+  }
+
+  // BUG FIX (Gap 3): a late respondent was silently placed on the
+  // waitlist by claim_sub_request() rather than told the spot was
+  // already filled. Send them the waitlist-confirmation email — first
+  // name and email come directly from the RPC result (claim_sub_request
+  // captures them from the players table during the same locked
+  // transaction), avoiding a second round-trip query here.
+  if (result?.status === 'SUCCESS_WAITLISTED') {
+    const { data: session } = await supabaseAdmin
+      .from('sub_requests')
+      .select(`
+        sessions (
+          id,
+          locations ( name ),
+          location
+        )
+      `)
+      .eq('id', Number(subId))
+      .maybeSingle()
+
+    const sessionRow = session?.sessions
+    const locationName = sessionRow?.locations?.name ?? sessionRow?.location ?? 'TBD'
+
+    if (result.player_email) {
+      await sendAddedToWaitlistNotice({
+        playerFirstName: result.player_first_name,
+        playerEmail: result.player_email,
+        sessionDateLabel: result.session_date_label,
+        locationName,
+      }).catch((err) => {
+        console.error('[api/subs/respond] waitlist notice email failed:', err)
+      })
+    } else {
+      console.error(
+        '[api/subs/respond] SUCCESS_WAITLISTED but no player_email in RPC result — email not sent.'
+      )
     }
   }
 

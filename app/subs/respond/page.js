@@ -11,6 +11,22 @@
 // state afterward (POST/redirect/GET pattern) — so the same query that
 // renders the "respond now" buttons also correctly renders the
 // "you're confirmed" result once a response has been recorded.
+//
+// BUG FIX (Gap 3, Aug 30 2026 session): this page previously showed
+// "Spot already filled" to anyone whose broadcast was already closed
+// (recipient.response === 'stale' || subRequest.status === 'closed'),
+// revealed the moment the page loaded — before the player had even
+// clicked anything. That directly violated Phase 3 Group 3's requirement
+// that a late respondent receive NO indication the spot was already
+// filled. The fix: the open-state "Want it?" buttons are now shown to
+// ANY not-yet-responded recipient (response = 'no_response' or 'stale'),
+// regardless of subRequest.status. Whether their eventual click resolves
+// to a real confirmation or a silent waitlist placement is decided
+// entirely server-side, in claim_sub_request() (see migration
+// 20260830160000) — never revealed passively by this page. A new
+// terminal state, recipient.response === 'waitlisted', is added below to
+// correctly render the outcome after that POST/redirect/GET cycle
+// completes for a late respondent.
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
@@ -153,16 +169,35 @@ export default async function SubResponsePage({ searchParams }) {
     )
   }
 
-  if (recipient.response === 'stale' || subRequest.status === 'closed') {
+  // BUG FIX (Gap 3): new terminal state for a late respondent who was
+  // silently placed on the waitlist by claim_sub_request(). Tone matches
+  // a normal, positive confirmation — no mention that the spot had
+  // already been filled by someone else.
+  if (recipient.response === 'waitlisted') {
     return (
       <Shell>
-        <h1 style={{ color: '#b45309' }}>Spot already filled</h1>
-        <p style={{ color: '#444' }}>Another player claimed this spot before you responded. Keep an eye out for future openings!</p>
+        <h1 style={{ color: '#2563eb' }}>You're on the waitlist!</h1>
+        <p style={{ color: '#444' }}>
+          You're on the waitlist for <strong>{dateLabel}</strong>{timeLabel ? ` at ${timeLabel}` : ''} at {locationName}.
+          We'll reach out right away if a spot opens up.
+        </p>
       </Shell>
     )
   }
 
-  // 4. Open state — show details and both action buttons.
+  // BUG FIX (Gap 3): the previous version of this page returned "Spot
+  // already filled" here whenever recipient.response === 'stale' OR
+  // subRequest.status === 'closed' — revealing closed status to anyone
+  // who hadn't even tried to respond yet. That block has been removed
+  // entirely. A recipient whose response is still 'no_response' or
+  // 'stale' now falls through to the same open-state buttons below,
+  // regardless of the underlying sub_request's status. Whether their
+  // click resolves to a real confirmation or a waitlist placement is
+  // decided server-side, on the actual POST — never revealed here.
+
+  // 4. Open state — show details and both action buttons. Shown to any
+  // recipient who hasn't yet given a definite response (no_response or
+  // stale), whether or not the broadcast is still technically active.
   return (
     <Shell>
       <h1 style={{ color: '#111', marginBottom: '8px' }}>Hi {player.first_name},</h1>

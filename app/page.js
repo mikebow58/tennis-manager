@@ -183,15 +183,29 @@ export default async function Dashboard({ searchParams }) {
   let cancellationCount = 0
 
   if (sessionIds.length > 0) {
+    // BUG FIX (dev session Sep 1, 2026): added cancellation_reason to the
+    // select. A tentative player whose court never fills is auto-released
+    // by daily-8pm-backstop (or manually by the organiser via the
+    // court-assignment review screen) with status = 'cancelled' — same as
+    // a real cancellation. cancellation_reason distinguishes them
+    // ('court_not_filled' vs 'player_initiated' / 'admin_cancelled'), so
+    // the count below can exclude the former. See migration
+    // 20260901000000_add_cancellation_reason.sql.
     const { data: availability } = await supabase
       .from('availability')
-      .select('session_id, player_id, status')
+      .select('session_id, player_id, status, cancellation_reason')
       .in('session_id', sessionIds)
 
     if (availability) {
-      availability.forEach(({ session_id, player_id, status }) => {
+      availability.forEach(({ session_id, player_id, status, cancellation_reason }) => {
         if (status === 'cancelled') {
-          cancellationCount++
+          // A court that never filled is not a cancellation — the
+          // player didn't back out, the court just came up short.
+          // NULL cancellation_reason (legacy/unhandled write paths)
+          // still counts, matching pre-fix behaviour as a safe default.
+          if (cancellation_reason !== 'court_not_filled') {
+            cancellationCount++
+          }
           return
         }
         playersWithSignup.add(player_id)

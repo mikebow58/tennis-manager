@@ -28,6 +28,17 @@
  *   Send court cancellation notices to those players (batch).
  *   Alert the organiser simultaneously.
  *
+ *   BUG FIX (dev session Sep 1, 2026): the update now also sets
+ *   cancellation_reason = 'court_not_filled'. Previously this wrote plain
+ *   status = 'cancelled', identical to a real player cancellation or
+ *   organiser removal — the admin dashboard's cancellation count
+ *   (app/page.js) was counting these court-didn't-fill releases as
+ *   cancellations, which they are not. The court-assignment approve route
+ *   (/api/admin/court-assignment/[sessionID]/approve) sets the same reason
+ *   value when the organiser manually cancels an incomplete court before
+ *   8pm — both represent the same underlying event. See migration
+ *   20260901000000_add_cancellation_reason.sql.
+ *
  * STEP 3 — Nothing to do:
  *   If Step 1 returns 0 rows: exit cleanly. All assignments already sent
  *   (organiser approved before 8pm).
@@ -36,6 +47,7 @@
  *                court_assignments, weeks (join)
  * Tables written: sessions (court_assignment_sent_at),
  *                 availability (status → 'cancelled', cancelled_at,
+ *                               cancellation_reason → 'court_not_filled',
  *                               court_assignment_status → null)
  * Emails sent:
  *   - sendCourtAssignmentDetailsFull — confirmed players when court numbers set
@@ -372,6 +384,10 @@ export async function GET(request) {
         status: 'cancelled',
         cancelled_at: new Date().toISOString(),
         court_assignment_status: null,
+        // BUG FIX (dev session Sep 1, 2026): distinguishes a court-never-
+        // filled auto-release from a real player cancellation or organiser
+        // removal. See migration 20260901000000_add_cancellation_reason.sql.
+        cancellation_reason: 'court_not_filled',
       })
       .in('id', tentativeIds)
 

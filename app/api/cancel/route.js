@@ -30,6 +30,14 @@
  *     'cancelled' and trigger post-close cancellation logic (organiser
  *     alert + sub request evaluation) — Phase 2 Section 7.2. Unchanged.
  *
+ *     BUG FIX (dev session Sep 1, 2026): the update now also sets
+ *     cancellation_reason = 'player_initiated'. Without this, the admin
+ *     dashboard's cancellation count could not distinguish a real player
+ *     cancellation from the daily-8pm-backstop cron's auto-release of
+ *     tentative players whose court never filled — both wrote plain
+ *     status = 'cancelled'. See migration
+ *     20260901000000_add_cancellation_reason.sql.
+ *
  * No auth session required — player identity is validated via signup_token
  * matching the player record. This is a public route.
  *
@@ -173,7 +181,15 @@ export async function POST(request) {
 
     const { error } = await supabase
       .from('availability')
-      .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), court_assignment_status: null })
+      .update({
+        status: 'cancelled',
+        cancelled_at: new Date().toISOString(),
+        court_assignment_status: null,
+        // BUG FIX (dev session Sep 1, 2026): distinguishes a real player
+        // cancellation from the backstop cron's court-not-filled release.
+        // See migration 20260901000000_add_cancellation_reason.sql.
+        cancellation_reason: 'player_initiated',
+      })
       .eq('id', availabilityId)
       .eq('player_id', playerId)
 

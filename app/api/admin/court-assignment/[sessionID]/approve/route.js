@@ -1,6 +1,15 @@
 /**
  * POST /api/admin/court-assignment/[sessionId]/approve
- * Full replacement — adds partner_setting to court_assignments writes.
+ * Full replacement — adds cancellation_reason to the cancellation update.
+ *
+ * BUG FIX (dev session Sep 1, 2026): the cancellation update below now sets
+ * cancellation_reason = 'court_not_filled'. This route handles the same
+ * underlying event as the daily-8pm-backstop cron's auto-cancel step — an
+ * incomplete court being released — just triggered manually by the
+ * organiser during review instead of automatically at 8pm. Both use the
+ * same reason value so the admin dashboard's cancellation count
+ * (app/page.js) excludes both consistently. See migration
+ * 20260901000000_add_cancellation_reason.sql.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -140,7 +149,13 @@ export async function POST(request, context) {
 
     const { error: cancelError } = await supabaseAdmin
       .from('availability')
-      .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), court_assignment_status: null })
+      .update({
+        status: 'cancelled',
+        cancelled_at: new Date().toISOString(),
+        court_assignment_status: null,
+        // BUG FIX (dev session Sep 1, 2026): see file header note above.
+        cancellation_reason: 'court_not_filled',
+      })
       .in('id', cancelledAvailabilityIds)
 
     if (cancelError) {

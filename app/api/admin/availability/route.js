@@ -65,8 +65,15 @@
  *   validation) — so every insert here qualifies unconditionally.
  *
  * DELETE: Remove a player from a session (organiser manual remove).
- *   POST-CLOSE: unchanged — transitions to 'cancelled' and triggers
+ *   POST-CLOSE: transitions to 'cancelled' and triggers
  *   handlePostCloseCancellation, same as always.
+ *
+ *   BUG FIX (dev session Sep 1, 2026): the post-close update now also sets
+ *   cancellation_reason = 'admin_cancelled'. Without this, the admin
+ *   dashboard's cancellation count could not distinguish an organiser
+ *   manual removal from the backstop cron's court-not-filled release —
+ *   both wrote plain status = 'cancelled'. See migration
+ *   20260901000000_add_cancellation_reason.sql.
  *
  *   PRE-CLOSE (session.status = 'open'): a pre-close removal is normally a
  *   quiet, silent hard-delete with no organiser notification (Phase 2
@@ -543,6 +550,11 @@ export async function DELETE(request) {
           status: 'cancelled',
           cancelled_at: new Date().toISOString(),
           court_assignment_status: null,
+          // BUG FIX (dev session Sep 1, 2026): distinguishes an organiser
+          // manual removal from the backstop cron's court-not-filled
+          // release. See migration
+          // 20260901000000_add_cancellation_reason.sql.
+          cancellation_reason: 'admin_cancelled',
         })
         .eq('id', availabilityId)
 

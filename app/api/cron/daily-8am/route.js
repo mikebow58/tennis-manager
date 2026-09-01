@@ -84,6 +84,13 @@
  *     5.5, real player-facing confirm/decline email — only if session
  *     closed short and the First Call pool is non-empty)
  *
+ * NOTE (cross-gender skill normalization, August 2026): the players select
+ * in Step 2 below now includes `gender`, so resolveSkill() (lib/court-
+ * balancing.js) can apply the fixed cross-gender comparison adjustment for
+ * female players when Procedure 1 balances courts. See lib/court-balancing.js
+ * for the full explanation. No other logic in this file changes — the
+ * adjustment is entirely internal to resolveSkill().
+ *
  * References:
  *   Phase 1 Cron Map — Section 4.5 (Check B) and Section 4.5 (Check C)
  *   Phase 2 State Machines — Section 4.4 (Procedure 1), Section 4.2
@@ -268,7 +275,9 @@ export async function GET(request) {
         // All players are currently in 'confirmed' status at this point —
         // 'tentative' is a Procedure 1 output, not set at signup time.
         // last_name is included — required to build "First L." roster
-        // entries in Pass 2 (post-beta item #5).
+        // entries in Pass 2 (post-beta item #5). gender is included — used
+        // by resolveSkill() (lib/court-balancing.js) for the cross-gender
+        // comparison adjustment applied during Procedure 1's balancing.
         // ----------------------------------------------------------------
         const { data: availability, error: availError } = await supabaseAdmin
           .from('availability')
@@ -283,6 +292,7 @@ export async function GET(request) {
               email,
               skill_admin,
               skill_self,
+              gender,
               signup_token
             )
           `)
@@ -322,6 +332,10 @@ export async function GET(request) {
 
         // ----------------------------------------------------------------
         // Step 3: Resolve each player's effective skill level.
+        // resolveSkill() applies the cross-gender comparison adjustment
+        // internally (see lib/court-balancing.js) — the resulting .skill
+        // value here is comparison-only and never displayed to players
+        // or the organiser.
         // ----------------------------------------------------------------
         const players = availability.map((avail) => ({
           availabilityId: avail.id,

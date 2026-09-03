@@ -41,6 +41,22 @@
  * lib/waitlist-promotion.js, so this cron's full/short determination is
  * consistent with the rest of the codebase.
  *
+ * FIX (Sept 2 session — found live during the two-week cron load test):
+ * the per-court skill range in the organiser review email was built from
+ * court.players[].skill — the gender-adjusted value lib/court-balancing.js's
+ * resolveSkill() produces for internal balancing comparisons only. That
+ * adjustment is documented codebase-wide as "never stored or displayed"
+ * (see lib/court-assignment.js header), but this email display path had
+ * never been updated to respect that. For a female player with a low
+ * skill_admin, the adjusted value can go negative or to 0, which has no
+ * valid NTRP label — confirmed live as "skill (-1--1)" and
+ * "skill (0-3.0-)" in session 72's review email. Fixed by reading
+ * court.players[].displaySkill instead — a new field lib/court-assignment.js
+ * now provides specifically for this purpose (see that file's own header
+ * for the full explanation). No other logic in this file changes; the
+ * gender-adjusted `skill` field is still used internally by Procedure 2
+ * for all actual court balancing, and this route never reads it directly.
+ *
  * Tables read:   sessions, availability, locations (join), weeks (join),
  *                admin_settings
  * Tables written: sessions (court_assignment_notified_at),
@@ -57,6 +73,7 @@
  *     Section 5.6 (capacity overflow / >= rationale)
  *   Phase 3 Cross-Lifecycle — Group 5 (6pm fires)
  *   Automation Logic — Section 8.2 (Path B)
+ *   lib/court-assignment.js — displaySkill field, gender-adjustment fix
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -228,8 +245,8 @@ if (isFull && !session.court_assignment_notified_at) {
     }
 
     console.log(
-      `[daily-6pm-court-assignment] Session ${session.id} (Path B — short): ` +
-      `confirmed=${confirmedCount}. Running Procedure 2.`
+      `[daily-6pm-court-assignment] Session ${session.id} (confirmed=${confirmedCount}, isFull=${isFull}): ` +
+      `Running Procedure 2.`
     )
 
     // ------------------------------------------------------------------
@@ -312,11 +329,19 @@ if (isFull && !session.court_assignment_notified_at) {
       }
 
       // Build court summary for the email (complete courts only).
+      //
+      // FIX (Sept 2): skill range now reads displaySkill, NOT skill.
+      // `skill` is the gender-adjusted internal comparison value from
+      // resolveSkill() (lib/court-balancing.js) — never safe to display.
+      // `displaySkill` (lib/court-assignment.js) is the same admin-scale
+      // resolution WITHOUT the gender adjustment, and is the only field
+      // safe to pass to getSkillLabel() here. See this file's own header
+      // and lib/court-assignment.js's header for the full explanation.
       for (const court of p2Result.courts.filter((c) => c.isComplete)) {
         const playerNames = court.players
           .map((p) => `${p.firstName} ${p.lastName}`)
           .join(', ')
-        const skillRange = `${getSkillLabel(Math.min(...court.players.map((p) => p.skill)))}–${getSkillLabel(Math.max(...court.players.map((p) => p.skill)))}`
+        const skillRange = `${getSkillLabel(Math.min(...court.players.map((p) => p.displaySkill)))}–${getSkillLabel(Math.max(...court.players.map((p) => p.displaySkill)))}`
         const locationSuffix = p2Result.isMultiLocation ? ` · ${court.locationName}` : ''
         courtSummaryLines.push(
           `Court ${court.courtLetter}${locationSuffix}: ${playerNames} (skill ${skillRange})`

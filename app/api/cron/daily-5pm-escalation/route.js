@@ -23,6 +23,40 @@
  *      Send escalation notice to organiser.
  *   4. If not short: no action.
  *
+ * FIX (Sept 3 session — found live during the two-week cron load test):
+ * subsNeeded was computed as (4 - (tentativeCount % 4)) % 4 || 4 — using
+ * ONLY the tentative count. That formula is correct only when
+ * confirmedCount is already a clean multiple of 4, which was always true
+ * before any sub-request claim existed (Procedure 1 always produces
+ * complete courts of 4 plus a single incomplete remainder). It breaks the
+ * moment a sub-request respondent is promoted straight to 'confirmed'
+ * (Phase 3 Group 3) without a full Procedure 2 rebalance — confirmedCount
+ * is then no longer guaranteed to be a multiple of 4 on its own. Confirmed
+ * live: session 72 at 18 signed up (16 confirmed + 2 tentative) received
+ * one successful sub-request claim, becoming 19 signed up (17 confirmed +
+ * 2 tentative). The old formula reported subsNeeded=2 (from tentativeCount
+ * alone); the correct value is 1 (19 needs 1 more to reach 20), matching
+ * the session detail page's own totalSignedUp-based calculation. This is
+ * the same broken invariant behind two prior fixes this test: the Aug 30
+ * dashboard "stale N short after partial fill" bug (app/page.js) and the
+ * Sept 2 daily-10am-fillin-expansion confirmed-count-only fullness check —
+ * same root cause, third file, first time this cron's version of it was
+ * actually exercised live (this test had not previously had a partial
+ * claim happen before this cron's own tomorrow-session check ran).
+ *
+ * Fixed by deriving subsNeeded from totalSignedUp (confirmedCount +
+ * tentativeCount) % 4, not tentativeCount alone. The `|| 4` fallback is
+ * removed: it existed only to guard against tentativeCount landing on an
+ * exact multiple of 4 while still meaning "definitely short," which was a
+ * "should not occur" safety net under the old formula. Under the new
+ * formula, totalSignedUp % 4 === 0 while tentativeCount > 0 is a real,
+ * meaningful state (a claim brought the total to a clean multiple of 4,
+ * but Procedure 2 hasn't rebalanced yet to promote the still-tentative
+ * players) — the correct answer there is genuinely 0 more players needed,
+ * not a forced 4. The email's own "still short" framing continues to
+ * reflect the official post-close-short definition (tentativeCount > 0,
+ * Phase 2 Section 5.4) regardless of subsNeeded's value.
+ *
  * Tables read:  sessions, availability, sub_requests, weeks (via join),
  *               locations (via join), admin_settings
  * Tables written: none
@@ -32,6 +66,7 @@
  *   Phase 1 Cron Map — Section 4.7
  *   Phase 2 State Machines — Section 5.4 (post-close short definition)
  *   Automation Logic — Section 12.6 (escalation logic)
+ *   Phase 3 Cross-Lifecycle — Group 3 (sub request outcomes → availability)
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -170,9 +205,20 @@ export async function GET(request) {
       continue
     }
 
-    // Number of players needed: players to complete the incomplete court(s).
-    // Same formula used throughout the codebase.
-    const subsNeeded = (4 - (tentativeCount % 4)) % 4 || 4
+    // ------------------------------------------------------------------
+    // Number of players needed: players to complete the incomplete
+    // court(s).
+    //
+    // FIX (Sept 3): derived from totalSignedUp (confirmed + tentative)
+    // % 4, NOT tentativeCount alone. See file header for full explanation
+    // of why the old tentative-only formula breaks once a sub-request
+    // claim promotes a respondent straight to 'confirmed' without a full
+    // Procedure 2 rebalance. No `|| 4` fallback — totalSignedUp % 4 === 0
+    // here is a real, meaningful "0 more needed" state, not a case that
+    // should never occur.
+    // ------------------------------------------------------------------
+    const totalSignedUp = (confirmedCount ?? 0) + tentativeCount
+    const subsNeeded = (4 - (totalSignedUp % 4)) % 4
 
     // ------------------------------------------------------------------
     // Fetch the most recent sub request for this session to report its
@@ -223,8 +269,8 @@ export async function GET(request) {
 
     console.log(
       `[daily-5pm-escalation] Session ${session.id} (${sessionDateLabel}) is short: ` +
-      `confirmed=${confirmedCount} tentative=${tentativeCount} subsNeeded=${subsNeeded} ` +
-      `subRequestStatus=${subRequestStatus ?? 'none'}`
+      `confirmed=${confirmedCount} tentative=${tentativeCount} totalSignedUp=${totalSignedUp} ` +
+      `subsNeeded=${subsNeeded} subRequestStatus=${subRequestStatus ?? 'none'}`
     )
 
     // ------------------------------------------------------------------

@@ -99,9 +99,12 @@ export default async function CancelPage({ params }) {
         willLeaveShort={willLeaveShort}
       />
 
-      {/* Post-beta item #9 — player-to-organizer messaging footer link. */}
+      {/* Post-beta item #9 — player-to-organizer messaging footer link.
+          BUG FIX (Sept 2026 — contact page security review): points to
+          the static contact-info page now, not the retired /contact/${token}
+          form route. */}
       <div className="mt-8 pt-4 border-t border-gray-100 text-center">
-        <a href={`/contact/${token}`} className="text-xs text-gray-400 hover:text-gray-600">
+        <a href="/contact" className="text-xs text-gray-400 hover:text-gray-600">
           Having trouble with this page? Let us know
         </a>
       </div>

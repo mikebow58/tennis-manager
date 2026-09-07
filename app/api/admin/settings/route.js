@@ -1,19 +1,19 @@
 // app/api/admin/settings/route.js
 //
 // GET  /api/admin/settings — returns current values for all organiser-
-//      configurable settings: admin email, default session start time,
-//      full location records (name, address, total_courts, notes, active),
-//      and the include-roster-in-reminder Communication toggle.
-//      Used to populate the settings page.
+//      configurable settings: admin email, admin phone, default session
+//      start time, full location records (name, address, total_courts,
+//      notes, active), and the include-roster-in-reminder Communication
+//      toggle. Used to populate the settings page.
 //
 // PUT  /api/admin/settings — accepts a partial payload and updates only
-//      the fields present. Four independent settings, three underlying
-//      tables (admin_settings, default_sessions, locations — the roster
-//      toggle shares admin_settings with the admin email key), exposed as
-//      a single endpoint since the settings page edits them together.
-//      Location edits here are for EXISTING locations only (including
-//      deactivate/reactivate via the `active` field) — creating a brand
-//      new location is a separate POST (below).
+//      the fields present. Five independent settings, three underlying
+//      tables (admin_settings, default_sessions, locations — admin phone
+//      and the roster toggle share admin_settings with the admin email
+//      key), exposed as a single endpoint since the settings page edits
+//      them together. Location edits here are for EXISTING locations only
+//      (including deactivate/reactivate via the `active` field) — creating
+//      a brand new location is a separate POST (below).
 //
 // POST /api/admin/settings — creates a new location. Kept on this same route
 //      file rather than a new /api/admin/locations route, since this file is
@@ -26,17 +26,23 @@
 // reads/writes, per the standard pattern for API routes.
 //
 // Tables touched (all via lib/admin-settings.js):
-//   admin_settings   — admin_email, include_roster_in_reminder keys
+//   admin_settings   — admin_email, admin_phone, include_roster_in_reminder keys
 //   default_sessions — start_time, written to all active rows together
 //   locations        — name, address, total_courts, notes, active
 //
-// THIS REVISION: added includeRosterInReminder (post-beta item #5 —
-// "Roster in reminder email"), the Communication section toggle controlling
-// whether confirmed-tier reminder emails list the confirmed roster.
+// THIS REVISION (Sept 2026 session — contact page security review): added
+// adminPhone (GET field + PUT handler via setAdminPhone), following the
+// same comma-separated multi-value pattern as adminEmail. Unlike
+// adminEmail, an empty/missing phone is a valid state — not every
+// organiser will want a phone number shown on the contact page, so PUT
+// does not reject an empty string the way it does for adminEmail. Powers
+// the static contact-info page (app/contact/page.js).
 
 import {
   getAdminEmail,
   setAdminEmail,
+  getAdminPhone,
+  setAdminPhone,
   getDefaultStartTime,
   setDefaultStartTime,
   getLocations,
@@ -53,7 +59,7 @@ import {
  * No request body. No params.
  *
  * @returns {Promise<Response>} 200 with
- *   { adminEmail, defaultStartTime, locations, includeRosterInReminder }
+ *   { adminEmail, adminPhone, defaultStartTime, locations, includeRosterInReminder }
  *   on success, 500 on any read failure.
  */
 export async function GET() {
@@ -62,8 +68,9 @@ export async function GET() {
   try {
     // Run all reads in parallel — they touch independent keys/tables and
     // have no ordering dependency on each other.
-    const [adminEmail, defaultStartTime, locations, includeRosterInReminder] = await Promise.all([
+    const [adminEmail, adminPhone, defaultStartTime, locations, includeRosterInReminder] = await Promise.all([
       getAdminEmail(),
+      getAdminPhone(),
       getDefaultStartTime(),
       getLocations(),
       getIncludeRosterInReminder(),
@@ -71,12 +78,14 @@ export async function GET() {
 
     console.log(
       `[admin/settings] GET — adminEmail=${adminEmail ? 'set' : 'null'} ` +
+      `adminPhone=${adminPhone ? 'set' : 'null'} ` +
       `defaultStartTime=${defaultStartTime ?? 'null'} locationsCount=${locations.length} ` +
       `includeRosterInReminder=${includeRosterInReminder}`
     )
 
     return Response.json({
       adminEmail,
+      adminPhone,
       defaultStartTime,
       locations,
       includeRosterInReminder,
@@ -99,6 +108,7 @@ export async function GET() {
  * Expected body shape (all fields optional):
  * {
  *   adminEmail?: string,
+ *   adminPhone?: string,
  *   defaultStartTime?: string,        // e.g. "09:00:00"
  *   locations?: Array<{
  *     id: string,
@@ -127,7 +137,7 @@ export async function PUT(request) {
     return Response.json({ error: 'Invalid request body' }, { status: 400 })
   }
 
-  const { adminEmail, defaultStartTime, locations, includeRosterInReminder } = body
+  const { adminEmail, adminPhone, defaultStartTime, locations, includeRosterInReminder } = body
 
   // Track per-field outcomes so the response can tell the UI exactly what
   // succeeded and what didn't, rather than a single pass/fail flag.
@@ -147,6 +157,27 @@ export async function PUT(request) {
       results.adminEmail = { success }
       if (!success) {
         console.error('[admin/settings] PUT — setAdminEmail failed')
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Admin phone — single value, admin_settings table. Unlike admin email,
+  // an empty string is valid (organiser may not want a phone number shown
+  // on the contact page at all) — so this only rejects a non-string, not
+  // an empty one.
+  // ------------------------------------------------------------------
+  if (adminPhone !== undefined) {
+    console.log('[admin/settings] PUT — updating admin phone')
+
+    if (typeof adminPhone !== 'string') {
+      console.warn('[admin/settings] PUT — rejected non-string adminPhone')
+      results.adminPhone = { success: false, error: 'Admin phone must be a string' }
+    } else {
+      const success = await setAdminPhone(adminPhone.trim())
+      results.adminPhone = { success }
+      if (!success) {
+        console.error('[admin/settings] PUT — setAdminPhone failed')
       }
     }
   }

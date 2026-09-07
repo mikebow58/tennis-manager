@@ -5,18 +5,19 @@
 // Organiser-facing settings page. Lets the organiser edit, without needing
 // database or Vercel access:
 //   1. Admin email recipient(s) — admin_settings.admin_email
-//   2. Default session start time — applied to all active default_sessions
-//   3. Locations — full CRUD: name, address, total_courts, notes, and an
+//   2. Admin phone number(s) — admin_settings.admin_phone
+//   3. Default session start time — applied to all active default_sessions
+//   4. Locations — full CRUD: name, address, total_courts, notes, and an
 //      active/deactivate toggle (soft delete). New locations can be added
 //      via a small inline form.
-//   4. Communication — include-roster-in-reminder toggle (post-beta item #5)
+//   5. Communication — include-roster-in-reminder toggle (post-beta item #5)
 //
-// THIS REVISION: added the Communication section with a single toggle
-// controlling whether confirmed-tier reminder emails include the
-// alphabetical roster of confirmed players. Saves instantly on click, same
-// pattern as the location active/inactive toggle below — a boolean flip is
-// a meaningfully different interaction than a text field edit, so instant
-// feedback (with revert-on-failure) matters more here than a batched save.
+// THIS REVISION (Sept 2026 session — contact page security review): added
+// the admin phone field, in the same card as admin email since both answer
+// "how do players/the app reach the organiser" and both support the same
+// comma-separated multi-value pattern — lets a stand-in organiser's number
+// be shown on the static contact page (app/contact/page.js) while the
+// primary organiser is away, same rationale as multi-value admin email.
 //
 // Each section saves independently via PUT /api/admin/settings, sending
 // only the field(s) being changed. Creating a new location is a separate
@@ -34,6 +35,11 @@ export default function AdminSettingsPage() {
   const [adminEmail, setAdminEmailValue] = useState('')
   const [adminEmailSaving, setAdminEmailSaving] = useState(false)
   const [adminEmailStatus, setAdminEmailStatus] = useState(null) // 'success' | 'error' | null
+
+  // Admin phone section state — saved via the same button/flow as admin
+  // email below (one "Save" click writes both fields together), since they
+  // live in the same card.
+  const [adminPhone, setAdminPhoneValue] = useState('')
 
   // Default start time section state.
   const [startTime, setStartTime] = useState('')
@@ -80,6 +86,7 @@ export default function AdminSettingsPage() {
       const data = await res.json()
 
       setAdminEmailValue(data.adminEmail ?? '')
+      setAdminPhoneValue(data.adminPhone ?? '')
       setStartTime(data.defaultStartTime ?? '')
       setLocations(
         (data.locations ?? []).map((loc) => ({
@@ -103,22 +110,26 @@ export default function AdminSettingsPage() {
   }
 
   // ------------------------------------------------------------------
-  // Save: admin email.
+  // Save: admin email + admin phone together — one card, one Save button.
+  // Both fields are sent on every save regardless of which one changed;
+  // the API route only writes fields present in the request, so sending
+  // both is harmless and keeps this handler simple.
   // ------------------------------------------------------------------
-  async function saveAdminEmail() {
+  async function saveAdminContact() {
     setAdminEmailSaving(true)
     setAdminEmailStatus(null)
     try {
       const res = await fetch('/api/admin/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ adminEmail }),
+        body: JSON.stringify({ adminEmail, adminPhone }),
       })
       const data = await res.json()
-      const success = data?.results?.adminEmail?.success
-      setAdminEmailStatus(success ? 'success' : 'error')
+      const emailSuccess = data?.results?.adminEmail?.success
+      const phoneSuccess = data?.results?.adminPhone?.success ?? true // phone may be optional/untouched
+      setAdminEmailStatus(emailSuccess && phoneSuccess ? 'success' : 'error')
     } catch (err) {
-      console.error('[admin/settings] saveAdminEmail error:', err)
+      console.error('[admin/settings] saveAdminContact error:', err)
       setAdminEmailStatus('error')
     } finally {
       setAdminEmailSaving(false)
@@ -357,26 +368,44 @@ export default function AdminSettingsPage() {
         )}
 
         {/* ------------------------------------------------------------ */}
-        {/* Admin email recipients                                       */}
+        {/* Admin contact — email + phone recipients                     */}
         {/* ------------------------------------------------------------ */}
         <section className="bg-white border border-gray-200 rounded-xl px-6 py-5">
-          <h2 className="text-sm font-semibold text-gray-800">Admin email recipients</h2>
+          <h2 className="text-sm font-semibold text-gray-800">Admin contact</h2>
           <p className="text-xs text-gray-500 mt-1 mb-4">
-            Where organiser notifications are sent. Separate multiple addresses with commas.
+            Where organiser notifications are sent, and the number shown to players on the
+            contact page. Separate multiple values with commas — useful if someone else is
+            covering organiser duties while you're away.
           </p>
 
-          <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-            <input
-              type="text"
-              value={adminEmail}
-              onChange={(e) => setAdminEmailValue(e.target.value)}
-              placeholder="you@example.com, backup@example.com"
-              className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Email</label>
+              <input
+                type="text"
+                value={adminEmail}
+                onChange={(e) => setAdminEmailValue(e.target.value)}
+                placeholder="you@example.com, backup@example.com"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Phone (text or call)</label>
+              <input
+                type="text"
+                value={adminPhone}
+                onChange={(e) => setAdminPhoneValue(e.target.value)}
+                placeholder="(719) 555-0100, (719) 555-0199"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4">
             <button
-              onClick={saveAdminEmail}
+              onClick={saveAdminContact}
               disabled={adminEmailSaving || adminEmail.trim().length === 0}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-40 disabled:hover:bg-blue-600 whitespace-nowrap"
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 text-sm font-medium disabled:opacity-40 disabled:hover:bg-blue-600"
             >
               {adminEmailSaving ? 'Saving...' : 'Save'}
             </button>

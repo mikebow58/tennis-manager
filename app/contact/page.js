@@ -17,12 +17,27 @@
 // Deliberately has no submission mechanism of any kind, so there is
 // nothing here to spam and nothing here to inject into.
 //
-// THIS REVISION: pulls organiser email and phone live from admin_settings
-// via lib/admin-settings.js (getAdminEmail / getAdminPhone) rather than
+// Pulls organiser email and phone live from admin_settings via
+// lib/admin-settings.js (getAdminEmail / getAdminPhone) rather than
 // hardcoding them — so a change made on the Settings page (e.g. a stand-in
 // organiser's number while the primary organiser is away) is reflected
 // immediately with no redeploy. Both settings support comma-separated
 // multiple values; each is rendered as its own line/link.
+//
+// BUG FIX (this revision): added `export const dynamic = 'force-dynamic'`.
+// Without it, Next.js caches this page's server-rendered output since the
+// underlying Supabase reads are fetch-based and cacheable by default. The
+// page was rendering once (capturing whatever admin_settings values existed
+// at that moment) and serving that same cached output on every subsequent
+// request — a browser hard-refresh has no effect on this, since the cache
+// lives server-side. Symptom: organiser added a phone number in Settings
+// after the page had already been rendered once, and the contact page kept
+// showing the old (phone-less) version indefinitely. force-dynamic makes
+// this route re-run its data fetch on every request, which is the correct
+// behaviour for a page displaying admin-configurable settings that can
+// change at any time.
+
+export const dynamic = 'force-dynamic'
 
 import { getAdminEmail, getAdminPhone } from '@/lib/admin-settings'
 

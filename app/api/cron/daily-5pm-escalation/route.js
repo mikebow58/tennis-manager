@@ -7,12 +7,28 @@
  * reschedule the cron. The setting controls the email copy only in V2.
  *
  * PURPOSE:
- * Read-only check. For every closed, non-cancelled session scheduled for
- * tomorrow that is still short (has tentative players), sends the organiser
- * an escalation notice with full context and a recommendation to begin
- * manual outreach before the 6pm automated broadcast window closes.
+ * Read-only check (see THIS REVISION note below for one addition). For
+ * every closed, non-cancelled session scheduled for tomorrow that is
+ * still short (has tentative players), sends the organiser an escalation
+ * notice with full context and a recommendation to begin manual outreach
+ * before the 6pm automated broadcast window closes.
  *
- * No database writes. No player notifications. Organiser-only.
+ * No player notifications. Organiser-only email.
+ *
+ * THIS REVISION (Sept 2026 session — waitlist-expiry redesign): this cron
+ * now also calls checkAllExpiredWaitlists() (lib/sub-requests.js) once, at
+ * the very start of the run, before the escalation-email logic below. This
+ * is the final backstop for the waitlist-expiry redesign — see that
+ * function's own header for the full design. It is silent to the
+ * organiser (checkAllExpiredWaitlists only emails players via
+ * broadcastToAllAvailable), so this cron's own escalation email is
+ * unaffected in tone or trigger condition. Running it first means that if
+ * it does expire and expand a stale waitlist broadcast for a session this
+ * cron is about to check, the escalation email's own "current sub request
+ * status" field below correctly reflects the fresh all_available/
+ * late_cancellation request rather than a stale closed waitlist one. This
+ * is the only DB-writing side effect this cron now has; the escalation
+ * check itself remains read-only exactly as before.
  *
  * DECISION TREE (Phase 1 Section 4.7):
  *   1. Query sessions WHERE session_date = tomorrow AND status = 'closed'
@@ -42,7 +58,11 @@
  * Sept 2 daily-10am-fillin-expansion confirmed-count-only fullness check —
  * same root cause, third file, first time this cron's version of it was
  * actually exercised live (this test had not previously had a partial
- * claim happen before this cron's own tomorrow-session check ran).
+ * claim happen before this cron's own tomorrow-session check ran). The
+ * standalone waitlist-expiry.js cron (retired this session, see
+ * lib/sub-requests.js) had the exact same bug in its own subsNeeded
+ * calculation — the fourth occurrence of this pattern, fixed as part of
+ * that retirement rather than separately.
  *
  * Fixed by deriving subsNeeded from totalSignedUp (confirmedCount +
  * tentativeCount) % 4, not tentativeCount alone. The `|| 4` fallback is
@@ -59,7 +79,8 @@
  *
  * Tables read:  sessions, availability, sub_requests, weeks (via join),
  *               locations (via join), admin_settings
- * Tables written: none
+ * Tables written: sub_requests (indirectly, via checkAllExpiredWaitlists —
+ *               see THIS REVISION note above)
  * Emails sent:  sendEscalationNotice — one per short session (organiser only)
  *
  * References:
@@ -67,12 +88,14 @@
  *   Phase 2 State Machines — Section 5.4 (post-close short definition)
  *   Automation Logic — Section 12.6 (escalation logic)
  *   Phase 3 Cross-Lifecycle — Group 3 (sub request outcomes → availability)
+ *   lib/sub-requests.js — checkAllExpiredWaitlists (waitlist-expiry backstop)
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendEscalationNotice } from '@/lib/email'
 import { formatDeadlineTime } from '@/lib/utils'
 import { getAdminEmail } from '@/lib/admin-settings'
+import { checkAllExpiredWaitlists } from '@/lib/sub-requests'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -85,6 +108,25 @@ export async function GET(request) {
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     console.warn('[daily-5pm-escalation] Unauthorised request — missing or invalid CRON_SECRET')
     return new Response('Unauthorised', { status: 401 })
+  }
+
+  // ------------------------------------------------------------------
+  // THIS REVISION: silent waitlist-expiry backstop. Runs first, before
+  // any escalation-email logic, so that if it expires and expands a
+  // stale waitlist broadcast, the per-session sub-request-status lookup
+  // further down in this same run reflects the post-expansion state.
+  // Sends no organiser email of its own — see lib/sub-requests.js header.
+  // ------------------------------------------------------------------
+  let waitlistExpiryOutcomes
+  try {
+    waitlistExpiryOutcomes = await checkAllExpiredWaitlists()
+    console.log(
+      '[daily-5pm-escalation] Waitlist-expiry backstop complete:',
+      JSON.stringify(waitlistExpiryOutcomes)
+    )
+  } catch (err) {
+    console.error('[daily-5pm-escalation] Waitlist-expiry backstop error:', err)
+    waitlistExpiryOutcomes = { expired: 0, alreadyResolved: 0, errors: 1 }
   }
 
   // ------------------------------------------------------------------
@@ -222,7 +264,10 @@ export async function GET(request) {
 
     // ------------------------------------------------------------------
     // Fetch the most recent sub request for this session to report its
-    // status to the organiser.
+    // status to the organiser. If the waitlist-expiry backstop above
+    // expired and expanded a stale broadcast for this session, this
+    // query will already reflect the fresh all_available/late_cancellation
+    // request rather than the closed waitlist one.
     // ------------------------------------------------------------------
     const { data: latestSubRequest } = await supabaseAdmin
       .from('sub_requests')
@@ -304,7 +349,11 @@ export async function GET(request) {
   }
 
   const elapsed = Date.now() - startTime
-  const outcome = { escalationsSent, sessionsChecked: tomorrowSessions.length }
+  const outcome = {
+    escalationsSent,
+    sessionsChecked: tomorrowSessions.length,
+    waitlistExpiry: waitlistExpiryOutcomes,
+  }
   console.log(`[daily-5pm-escalation] Complete in ${elapsed}ms.`, JSON.stringify(outcome))
 
   return new Response(

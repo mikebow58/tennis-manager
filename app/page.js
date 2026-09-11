@@ -220,6 +220,38 @@ export default async function Dashboard({ searchParams }) {
     }
   }
 
+  // THIS REVISION (Sept 2026 session — waitlist-expiry redesign, dashboard
+  // sub-request visibility): fetch every currently-active sub_requests row
+  // for the sessions on this page, along with its recipients, so the day
+  // card can show a lightweight "Sub request active — sent to N players"
+  // indicator. Shown for ANY active request_type (first_call,
+  // all_available, waitlist, late_cancellation) — per organiser decision,
+  // this isn't scoped to any particular broadcast source. A session can
+  // have multiple simultaneously-active sub_requests (e.g. a first_call
+  // plus its all_available expansion, per the Sept 2026 Phase 3
+  // correction) — per organiser decision, these are combined into one
+  // count of DISTINCT players contacted across all active requests for
+  // that session, not broken out per request type. Full detail (which
+  // request, who responded how) lives on the new /admin/sub-requests/
+  // [sessionId] page this links to.
+  const subRequestPlayerSets = {}
+  if (sessionIds.length > 0) {
+    const { data: activeSubRequests } = await supabase
+      .from('sub_requests')
+      .select('session_id, sub_request_recipients(player_id)')
+      .in('session_id', sessionIds)
+      .eq('status', 'active')
+
+    ;(activeSubRequests || []).forEach((sr) => {
+      if (!subRequestPlayerSets[sr.session_id]) {
+        subRequestPlayerSets[sr.session_id] = new Set()
+      }
+      ;(sr.sub_request_recipients || []).forEach((rec) => {
+        subRequestPlayerSets[sr.session_id].add(rec.player_id)
+      })
+    })
+  }
+
   const { data: allPlayers } = await supabase
     .from('players')
     .select('id')
@@ -361,6 +393,12 @@ export default async function Dashboard({ searchParams }) {
                 // context for the organizer, never sent to players.
                 const organizerNote = session.organiser_notes?.trim() || null
 
+                // THIS REVISION: distinct player count across all
+                // currently-active sub_requests for this session,
+                // regardless of request_type. undefined/size 0 means no
+                // indicator is shown.
+                const activeSubRequestCount = subRequestPlayerSets[session.id]?.size || 0
+
                 // ------------------------------------------------------
                 // Cancelled state — checked BEFORE the completed check,
                 // since a cancelled session could be in the future or the
@@ -421,60 +459,74 @@ export default async function Dashboard({ searchParams }) {
                   )
                 }
 
+                // THIS REVISION: wrapped in an outer <div> so the new
+                // sub-request indicator link can render as a SIBLING of
+                // the main card <Link>, not nested inside it — nesting a
+                // second <a> inside the card's own <Link> would produce
+                // invalid HTML (nested anchors) and broken click behaviour.
                 return (
-                  <Link
-                    key={session.id}
-                    href={`/weeks/${week.id}/sessions/${session.id}`}
-                    className={`block rounded-xl p-4 transition-opacity hover:opacity-90 ${
-                      isFull
-                        ? 'bg-green-50 border border-green-200'
-                        : isShort
-                        ? 'bg-amber-50 border border-amber-200'
-                        : 'bg-white border border-gray-200'
-                    }`}
-                  >
-                    <div className={`text-sm font-medium mb-1 ${
-                      isFull
-                        ? 'text-green-900'
-                        : isShort
-                        ? 'text-amber-900'
-                        : 'text-gray-900'
-                    }`}>
-                      {dateLabel}
-                    </div>
-                    <div className="text-xs text-gray-400 mb-3">
-                      {formatTime(session.start_time)} · {locationName}
-                    </div>
-                    {organizerNote && (
-                      <div className="text-xs text-gray-500 italic mb-3 border-t border-gray-100 pt-2">
-                        {organizerNote}
-                      </div>
-                    )}
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs text-gray-400">
-                        {isEmpty
-                          ? `${courtsAvailable} ${courtsAvailable === 1 ? 'court' : 'courts'}`
-                          : `${totalSignedUp} player${totalSignedUp !== 1 ? 's' : ''} · ${courtsAvailable} ${courtsAvailable === 1 ? 'court' : 'courts'}`}
-                      </span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                  <div key={session.id} className="space-y-1">
+                    <Link
+                      href={`/weeks/${week.id}/sessions/${session.id}`}
+                      className={`block rounded-xl p-4 transition-opacity hover:opacity-90 ${
                         isFull
-                          ? 'bg-green-600 text-white'
+                          ? 'bg-green-50 border border-green-200'
                           : isShort
-                          ? 'bg-amber-500 text-white'
-                          : 'bg-gray-500 text-white'
+                          ? 'bg-amber-50 border border-amber-200'
+                          : 'bg-white border border-gray-200'
+                      }`}
+                    >
+                      <div className={`text-sm font-medium mb-1 ${
+                        isFull
+                          ? 'text-green-900'
+                          : isShort
+                          ? 'text-amber-900'
+                          : 'text-gray-900'
                       }`}>
-                        {isFull ? 'Full' : isEmpty ? emptyLabel : isShort ? `${spotsNeeded} short` : 'Open'}
-                      </span>
-                    </div>
-                    {/* Design decision (Aug 25, 2026 session): Full + waitlist
-                        shown as small supplementary text under the badge,
-                        rather than replacing the badge or adding a second one. */}
-                    {isFull && waitlistedCount > 0 && (
-                      <div className="text-xs text-blue-500 mt-1 text-right">
-                        +{waitlistedCount} waitlisted
+                        {dateLabel}
                       </div>
+                      <div className="text-xs text-gray-400 mb-3">
+                        {formatTime(session.start_time)} · {locationName}
+                      </div>
+                      {organizerNote && (
+                        <div className="text-xs text-gray-500 italic mb-3 border-t border-gray-100 pt-2">
+                          {organizerNote}
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-gray-400">
+                          {isEmpty
+                            ? `${courtsAvailable} ${courtsAvailable === 1 ? 'court' : 'courts'}`
+                            : `${totalSignedUp} player${totalSignedUp !== 1 ? 's' : ''} · ${courtsAvailable} ${courtsAvailable === 1 ? 'court' : 'courts'}`}
+                        </span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          isFull
+                            ? 'bg-green-600 text-white'
+                            : isShort
+                            ? 'bg-amber-500 text-white'
+                            : 'bg-gray-500 text-white'
+                        }`}>
+                          {isFull ? 'Full' : isEmpty ? emptyLabel : isShort ? `${spotsNeeded} short` : 'Open'}
+                        </span>
+                      </div>
+                      {/* Design decision (Aug 25, 2026 session): Full + waitlist
+                          shown as small supplementary text under the badge,
+                          rather than replacing the badge or adding a second one. */}
+                      {isFull && waitlistedCount > 0 && (
+                        <div className="text-xs text-blue-500 mt-1 text-right">
+                          +{waitlistedCount} waitlisted
+                        </div>
+                      )}
+                    </Link>
+                    {activeSubRequestCount > 0 && (
+                      <Link
+                        href={`/admin/sub-requests/${session.id}`}
+                        className="block text-xs text-blue-600 hover:underline px-1"
+                      >
+                        Sub request active — sent to {activeSubRequestCount} player{activeSubRequestCount !== 1 ? 's' : ''}
+                      </Link>
                     )}
-                  </Link>
+                  </div>
                 )
               })}
             </div>

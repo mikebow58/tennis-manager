@@ -13,8 +13,10 @@ export default function SignOutButton() {
   // players. Add any new player-facing route prefix here AND to
   // isPublicRoute in lib/supabase-middleware.js — two separate allowlists,
   // both must be updated together.
-  // NOTE: '/portal' is not yet added — the Player Portal (Project Summary
-  // §8.8) doesn't exist yet. Add it here when that page is built.
+  // UPDATED (Sept 2026 — Player page decision): no separate /portal route
+  // is being built. The player's permanent status page lives at
+  // /signup/[token], already covered by the '/signup' prefix below — no
+  // new entry needed here.
   const isPublicRoute =
     pathname.startsWith('/signup') ||
     pathname.startsWith('/cancel') ||

@@ -91,6 +91,18 @@
  * for the full explanation. No other logic in this file changes — the
  * adjustment is entirely internal to resolveSkill().
  *
+ * THIS REVISION (Sept 2026 session — Player page build):
+ *   Step 7's per-player email payloads had a bug independent of the
+ *   deferred /portal route build: cancelUrl was constructed as
+ *   `${baseUrl}/portal/${signupToken}` for both confirmed and tentative
+ *   players, but a per-session CANCEL action needs the real cancel route
+ *   `/cancel/${signupToken}/${sessionId}` (confirmed correct usage
+ *   elsewhere in this codebase — see lib/sub-requests.js). Fixed here.
+ *   Also added playerPageUrl (`/signup/${signupToken}` — the permanent,
+ *   non-rotating "Player page," per organiser decision, state handoff
+ *   Sept 11 2026) to both payloads, rendered as a bookmark-style footer
+ *   link by lib/email.js's shared buildFooterHtml() helper.
+ *
  * References:
  *   Phase 1 Cron Map — Section 4.5 (Check B) and Section 4.5 (Check C)
  *   Phase 2 State Machines — Section 4.4 (Procedure 1), Section 4.2
@@ -657,6 +669,12 @@ export async function GET(request) {
 
         // ----------------------------------------------------------------
         // Step 7: Build and send tiered reminder emails.
+        //
+        // THIS REVISION: cancelUrl fixed from `/portal/${signupToken}` to
+        // the real per-session cancel route `/cancel/${signupToken}/
+        // ${session.id}` (see file header bug note). playerPageUrl added
+        // pointing at `/signup/${signupToken}` — the permanent Player
+        // page — rendered as a bookmark footer link by lib/email.js.
         // ----------------------------------------------------------------
         const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
@@ -699,7 +717,8 @@ export async function GET(request) {
             startTime: startTimeLabel,
             locationName,
             notes: session.notes ?? null,
-            cancelUrl: `${baseUrl}/portal/${p.signupToken}`,
+            cancelUrl: `${baseUrl}/cancel/${p.signupToken}/${session.id}`,
+            playerPageUrl: `${baseUrl}/signup/${p.signupToken}`,
             rosterNames, // post-beta item #5 — empty array if setting is off
           }))
 
@@ -710,7 +729,8 @@ export async function GET(request) {
             playerEmail: p.email,
             sessionDate: sessionDateLabel,
             deadlineLabel,
-            cancelUrl: `${baseUrl}/portal/${p.signupToken}`,
+            cancelUrl: `${baseUrl}/cancel/${p.signupToken}/${session.id}`,
+            playerPageUrl: `${baseUrl}/signup/${p.signupToken}`,
             // No rosterNames — tentative reminder stays status-only.
           }))
 

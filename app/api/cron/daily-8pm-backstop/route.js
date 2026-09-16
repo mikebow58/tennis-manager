@@ -55,6 +55,22 @@
  *   - sendCourtCancellationNotice    — tentative players (batch, per session)
  *   - sendBackstopCancellationAlert  — organiser (per session with cancellations)
  *
+ * THIS REVISION (Sept 2026 session — Player page build):
+ *   All three places that build a confirmed player's `cancelUrl` had the
+ *   same independent bug: they pointed at `/portal/${signup_token}`, but
+ *   the intended action is a per-session CANCEL, which needs
+ *   `/cancel/${signup_token}/${sessionId}` (confirmed correct usage
+ *   elsewhere in this codebase — see lib/sub-requests.js). Fixed in all
+ *   three: the court_assignments-based full-details branch, the
+ *   session-details-only branch, and the availability-fallback branch.
+ *   The fallback branch's `confirmedAvail` query previously didn't select
+ *   `session_id` at all — added, since it's now required to build the
+ *   corrected cancelUrl (a day can have sibling sessions, so player
+ *   session_id can't be assumed to equal the outer `session.id`).
+ *   playerPageUrl (`/signup/${signup_token}` — the permanent Player page)
+ *   added throughout, including on the tentative cancellation-notice
+ *   payload, which previously had no link at all.
+ *
  * References:
  *   Phase 1 Cron Map — Section 4.9
  *   Phase 2 State Machines — Section 4.5 (Procedure 2), Section 7.2
@@ -230,6 +246,10 @@ export async function GET(request) {
     if (hasCourtAssignments) {
       if (allHaveCourtNumbers) {
         // Full details — court number included in email.
+        // BUG FIX (Sept 2026 — Player page build): cancelUrl was
+        // `/portal/${signup_token}`, which is not a cancel action.
+        // Corrected to the real per-session cancel route. playerPageUrl
+        // added for the new bookmark footer link.
         const emailPayloads = confirmedAssignments.map((a) => {
           const playerSession = daySessions.find((s) => s.id === a.session_id)
           return {
@@ -240,7 +260,8 @@ export async function GET(request) {
             locationName: a.locations?.name ?? 'TBD',
             courtNumber: a.court_number,
             notes: playerSession?.notes ?? null,
-            cancelUrl: `${baseUrl}/portal/${a.players.signup_token}`,
+            cancelUrl: `${baseUrl}/cancel/${a.players.signup_token}/${a.session_id}`,
+            playerPageUrl: `${baseUrl}/signup/${a.players.signup_token}`,
           }
         })
 
@@ -255,6 +276,8 @@ export async function GET(request) {
 
       } else {
         // Court numbers not fully set — session details only.
+        // BUG FIX (Sept 2026 — Player page build): same cancelUrl fix as
+        // the full-details branch above.
         const emailPayloads = confirmedAssignments.map((a) => {
           const playerSession = daySessions.find((s) => s.id === a.session_id)
           return {
@@ -264,7 +287,8 @@ export async function GET(request) {
             startTime: formatStartTime(playerSession?.start_time),
             locationName: a.locations?.name ?? 'TBD',
             notes: playerSession?.notes ?? null,
-            cancelUrl: `${baseUrl}/portal/${a.players.signup_token}`,
+            cancelUrl: `${baseUrl}/cancel/${a.players.signup_token}/${a.session_id}`,
+            playerPageUrl: `${baseUrl}/signup/${a.players.signup_token}`,
           }
         })
 
@@ -286,10 +310,16 @@ export async function GET(request) {
         `falling back to availability query. Procedure 2 may not have run.`
       )
 
+      // BUG FIX (Sept 2026 — Player page build): session_id added to this
+      // select. It wasn't previously selected at all, so the fallback
+      // branch had no way to build a correct per-session cancelUrl (a day
+      // can have multiple sibling sessions — session_id can't be assumed
+      // to equal the outer `session.id`).
       const { data: confirmedAvail, error: confirmedAvailError } = await supabaseAdmin
         .from('availability')
         .select(`
           id,
+          session_id,
           players ( first_name, last_name, email, signup_token )
         `)
         .in('session_id', sessionIds)
@@ -301,7 +331,10 @@ export async function GET(request) {
           confirmedAvailError.message
         )
       } else if (confirmedAvail?.length > 0) {
-        // Use first session's details for the fallback email.
+        // Use first session's details for the fallback email (location,
+        // start time, notes) — but each player's cancelUrl uses their own
+        // actual session_id, not the primary session's, for correctness
+        // on multi-location days.
         const primarySession = daySessions[0]
         const locationName = primarySession?.locations?.name ?? 'TBD'
 
@@ -312,7 +345,8 @@ export async function GET(request) {
           startTime: formatStartTime(primarySession?.start_time),
           locationName,
           notes: primarySession?.notes ?? null,
-          cancelUrl: `${baseUrl}/portal/${a.players.signup_token}`,
+          cancelUrl: `${baseUrl}/cancel/${a.players.signup_token}/${a.session_id}`,
+          playerPageUrl: `${baseUrl}/signup/${a.players.signup_token}`,
         }))
 
         const { sent, failed } = await sendCourtAssignmentDetails(emailPayloads)
@@ -409,6 +443,8 @@ export async function GET(request) {
 
     // Send cancellation notices to the tentative players (batch).
     // Group by session to get the right location per player on multi-location days.
+    // THIS REVISION: playerPageUrl added — this email previously had no
+    // link at all.
     const tentativeEmailPayloads = tentativeAvail.map((a) => {
       const playerSession = daySessions.find((s) => s.id === a.session_id)
       return {
@@ -417,6 +453,7 @@ export async function GET(request) {
         sessionDate: sessionDateLabel,
         startTime: formatStartTime(playerSession?.start_time),
         locationName: playerSession?.locations?.name ?? 'TBD',
+        playerPageUrl: `${baseUrl}/signup/${a.players.signup_token}`,
       }
     })
 

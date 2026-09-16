@@ -12,6 +12,34 @@
 // one used, and a genuine zero-match case fails gracefully instead of
 // throwing. See Phase 3 Group 6 (Signup Link Security and Session
 // Visibility) for the underlying rule this page enforces.
+//
+// THIS REVISION (Sept 2026 session — Player page build): this route is now
+// permanently the "Player page." Per organiser decision (state handoff,
+// Sept 11 2026), no separate /portal route is being built — the player's
+// existing, non-rotating signup_token URL does double duty year-round.
+// New behaviour: whenever there is nothing open for this player to sign up
+// for (openSessions.length === 0 — covers both "no week is sent right now"
+// and "a week is sent but every session in it has already closed to new
+// signups," which is actually the more common week-to-week case), the page
+// now looks up the player's nearest upcoming confirmed/tentative session
+// and shows a status summary instead of a dead-end generic message. Falls
+// back to the original generic "nothing open" message (Project Summary
+// §8.2 / post-beta item "Empty signup page state") if no upcoming session
+// is found either.
+//
+// NOTE: this bypasses SignupForm entirely for the empty-state case, the
+// same way the existing opted-out branch below already does — SignupForm's
+// own internals for sessions=[] were not reviewed as part of this change
+// (file wasn't available this session). Worth a quick check that nothing
+// inside SignupForm.js was relying on being rendered with an empty
+// sessions array.
+//
+// NOTE: the nested-relation query below (sessions joined to availability
+// via `availability!inner(...)`, filtered by player_id/status on the
+// embedded resource) has not been directly tested against the dev database
+// as of this revision — flagging for verification in the next test pass,
+// per this project's practice of confirming schema assumptions before
+// trusting them.
 
 import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import SignupForm from './SignupForm'
@@ -107,6 +135,112 @@ export default async function SignupPage({ params }) {
     }
 
     if (sessions) openSessions.push(...sessions)
+  }
+
+  // ---------------------------------------------------------------------
+  // NEW (Sept 2026 — Player page): nothing currently open for this player
+  // to act on. Before falling back to a dead-end generic message, check
+  // whether they have an upcoming confirmed/tentative spot worth showing.
+  // Returned early, before the signedUpSessionIds query below, since it's
+  // not needed on this path.
+  // ---------------------------------------------------------------------
+  if (openSessions.length === 0) {
+    const { data: upcomingSessions, error: upcomingError } = await supabase
+      .from('sessions')
+      .select(`
+        session_date,
+        start_time,
+        locations ( name ),
+        availability!inner ( status )
+      `)
+      .gte('session_date', todayStr)
+      .is('cancelled_at', null)
+      .eq('availability.player_id', player.id)
+      .in('availability.status', ['confirmed', 'tentative'])
+      .order('session_date', { ascending: true })
+      .limit(1)
+
+    if (upcomingError) {
+      // Non-fatal — the status summary is a nicety, not core functionality.
+      // Log and fall through to the generic message rather than breaking
+      // the whole page over it.
+      console.error('Player page upcoming-status query error:', upcomingError)
+    }
+
+    const upcoming = upcomingSessions && upcomingSessions.length > 0
+      ? upcomingSessions[0]
+      : null
+
+    if (upcoming) {
+      const upcomingStatus = upcoming.availability?.[0]?.status
+      // Parse as local midnight (not UTC) to avoid the date shifting back
+      // a day in negative-offset timezones when session_date is a bare
+      // date string like "2026-09-17".
+      const dateLabel = new Date(`${upcoming.session_date}T00:00:00`).toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'short',
+        day: 'numeric',
+      })
+      const locationName = upcoming.locations?.name || 'the usual spot'
+
+      return (
+        <div className="max-w-md mx-auto p-6">
+          <div className="mb-8">
+            <h1 className="text-2xl font-semibold text-gray-900 mb-1">
+              Hi, {player.first_name}!
+            </h1>
+          </div>
+
+          {upcomingStatus === 'confirmed' ? (
+            <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+              <p className="text-sm text-green-800">
+                You're confirmed for <strong>{dateLabel}</strong> at {locationName}.
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <p className="text-sm text-amber-800">
+                You're tentatively on the roster for <strong>{dateLabel}</strong> at{' '}
+                {locationName}. We're still working on completing your court and
+                will let you know as soon as it's settled — usually by early
+                evening the day before.
+              </p>
+            </div>
+          )}
+
+          <p className="text-sm text-gray-500 mt-6">
+            No new signup window is open right now. You'll receive an email
+            when the next one opens.
+          </p>
+
+          <div className="mt-8 pt-4 border-t border-gray-100 text-center">
+            <a href="/contact" className="text-xs text-gray-400 hover:text-gray-600">
+              Having trouble with this page? Let us know
+            </a>
+          </div>
+        </div>
+      )
+    }
+
+    // No upcoming confirmed/tentative session either — original generic
+    // message, rendered directly (see file header note on the SignupForm
+    // bypass).
+    return (
+      <div className="max-w-md mx-auto p-6 text-center">
+        <h1 className="text-2xl font-semibold text-gray-900 mb-1">
+          Hi, {player.first_name}!
+        </h1>
+        <p className="text-sm text-gray-500 mt-6">
+          No sessions are currently open for signup. You'll receive an email
+          when the next signup window opens.
+        </p>
+        <div className="mt-8 pt-4 border-t border-gray-100 text-center">
+          <a href="/contact" className="text-xs text-gray-400 hover:text-gray-600">
+            Having trouble with this page? Let us know
+          </a>
+        </div>
+      </div>
+    )
   }
 
   const { data: existing } = await supabase

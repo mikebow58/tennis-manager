@@ -31,6 +31,14 @@
 // revision. This route does not itself prevent future signups; it only
 // marks the session and notifies existing confirmed players.
 //
+// THIS REVISION (Sept 2026 session — Player page build): added
+// signup_token to the confirmed-players select below (it wasn't selected
+// at all previously) so each recipient can get a playerPageUrl
+// (`/signup/${token}` — the permanent Player page, per organiser
+// decision), rendered as a bookmark-style footer link by lib/email.js's
+// shared buildFooterHtml() helper. Completes the playerPageUrl wiring for
+// this caller.
+//
 // Tables read:  sessions, availability, sub_requests
 // Tables written: sessions (cancelled_at, cancellation_note),
 //   sub_requests (status → closed, active rows only)
@@ -113,10 +121,12 @@ export async function POST(request, { params }) {
   // ------------------------------------------------------------------
   // Step 4: Fetch CONFIRMED players only — tentative and waitlisted are
   // deliberately excluded per organiser decision (see file header).
+  // signup_token added (Sept 2026 — Player page build) so each recipient
+  // can get a playerPageUrl below.
   // ------------------------------------------------------------------
   const { data: confirmedRows, error: confirmedError } = await supabaseAdmin
     .from('availability')
-    .select('players ( first_name, email )')
+    .select('players ( first_name, email, signup_token )')
     .eq('session_id', sessionId)
     .eq('status', 'confirmed')
 
@@ -136,6 +146,7 @@ export async function POST(request, { params }) {
       })
     : 'Unknown date'
   const locationName = session.locations?.name ?? 'TBD'
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
   const recipients = (confirmedRows ?? [])
     .filter((r) => r.players?.email)
@@ -145,6 +156,9 @@ export async function POST(request, { params }) {
       sessionDateLabel,
       locationName,
       cancellationNote,
+      playerPageUrl: r.players.signup_token
+        ? `${baseUrl}/signup/${r.players.signup_token}`
+        : undefined,
     }))
 
   let emailResult = { sent: 0, failed: 0 }

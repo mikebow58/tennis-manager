@@ -15,6 +15,22 @@
 // them the corresponding waitlist-confirmation email. No organiser email
 // is sent for this event; the docs don't call for one, and the roster
 // itself hasn't changed as a result of a late/waitlisted response.
+//
+// THIS REVISION (Sept 2026 session — Player page build): the
+// SUCCESS_COMPLETE promotion email now passes playerPageUrl
+// (`/signup/${token}` — the permanent Player page, per organiser
+// decision), using promoted.signup_token, which was already available
+// here (used to build cancelUrl).
+//
+// KNOWN GAP, NOT FIXED: the SUCCESS_WAITLISTED branch's
+// sendAddedToWaitlistNotice call could NOT be wired with playerPageUrl —
+// claim_sub_request()'s RPC result doesn't return a signup_token (or
+// player id) for that case, only player_email and player_first_name. This
+// needs an RPC change (add player_signup_token to the SUCCESS_WAITLISTED
+// return shape in the claim_sub_request() SQL function) before this one
+// email can get the footer link. sendAddedToWaitlistNotice's
+// playerPageUrl param is optional and no-ops when omitted, so this is
+// safe to leave as a follow-up rather than guessing at a query here.
 
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -91,6 +107,7 @@ export async function POST(request) {
         locationName,
         startTime: sessionRow?.start_time,
         cancelUrl: `${baseUrl}/cancel/${promoted.signup_token}/${sessionRow?.id}`,
+        playerPageUrl: `${baseUrl}/signup/${promoted.signup_token}`,
       }).catch((err) => {
         console.error('[api/subs/respond] promotion email failed:', err)
       })
@@ -115,6 +132,10 @@ export async function POST(request) {
   // name and email come directly from the RPC result (claim_sub_request
   // captures them from the players table during the same locked
   // transaction), avoiding a second round-trip query here.
+  //
+  // NOTE (Sept 2026 — Player page build): no playerPageUrl here — see
+  // file header "KNOWN GAP" note. result does not currently expose a
+  // signup_token for this branch.
   if (result?.status === 'SUCCESS_WAITLISTED') {
     const { data: session } = await supabaseAdmin
       .from('sub_requests')

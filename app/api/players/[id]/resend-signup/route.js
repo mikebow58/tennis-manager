@@ -23,6 +23,12 @@
 //     the most recently sent week (highest signup_sent_at) is used — that's
 //     the current live signup window from the organiser's perspective.
 //
+// THIS REVISION (Sept 2026 session — Player page build): added
+// playerPageUrl (`/signup/${token}` — the permanent Player page, per
+// organiser decision) to the sendSignupRequest call, rendered as a
+// bookmark-style footer link by lib/email.js's shared buildFooterHtml()
+// helper. Completes the playerPageUrl wiring for this caller.
+//
 // Tables read: players, weeks
 // Emails sent: sendSignupRequest (lib/email.js) — single recipient,
 //   DEV_EMAIL_OVERRIDE applied automatically inside that function.
@@ -82,13 +88,14 @@ export async function POST(request, { params }) {
   }
 
   // ------------------------------------------------------------------
-  // Step 3: Build the signup URL and week label, then send.
-  // Date formatting matches the pattern used elsewhere in the app for
-  // date-only fields (timeZone: 'UTC' avoids an off-by-one from local
+  // Step 3: Build the signup URL, player page URL, and week label, then
+  // send. Date formatting matches the pattern used elsewhere in the app
+  // for date-only fields (timeZone: 'UTC' avoids an off-by-one from local
   // browser/server timezone interpretation of a bare YYYY-MM-DD string).
   // ------------------------------------------------------------------
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
   const signupUrl = `${baseUrl}/signup/${player.signup_token}`
+  const playerPageUrl = `${baseUrl}/signup/${player.signup_token}`
   const weekLabel = new Date(sentWeek.week_start_date).toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',
@@ -101,6 +108,7 @@ export async function POST(request, { params }) {
     playerEmail: player.email,
     signupUrl,
     weekLabel,
+    playerPageUrl,
   })
 
   if (!success) {

@@ -23,6 +23,14 @@
  * Tables read: weeks, players
  * Tables written: weeks
  *
+ * THIS REVISION (Sept 2026 session — Player page build): the per-player
+ * payload's `portalUrl` field renamed to `playerPageUrl` for naming
+ * consistency (per organiser decision, state handoff Sept 11 2026), and
+ * its value corrected from `/portal/${token}` (a route that was never
+ * built and never will be) to `/signup/${token}` — the permanent Player
+ * page. lib/email.js's sendSignupRequestBatch updated to match this field
+ * name in the same session.
+ *
  * BUG FIX (dev session Aug 25, 2026, part 1): "upcoming Monday" was
  * previously computed as a hardcoded `today + 3 days` — correct only when
  * this cron actually runs on a Friday (the only day Vercel's real schedule
@@ -187,7 +195,7 @@ export async function GET(request) {
   if (week.status === 'approved') {
     console.log('[friday-signup-send] Week is approved — proceeding with signup send.')
 
-    // Fetch all active players. We need: id (for portal URL), first_name,
+    // Fetch all active players. We need: id (for player page URL), first_name,
     // last_name, email, and signup_token (for the personalised signup URL).
     const { data: players, error: playersError } = await supabaseAdmin
       .from('players')
@@ -218,13 +226,16 @@ export async function GET(request) {
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
     // Build the per-player payload array. Each player gets:
-    //   signupUrl  — their unique personalised signup link (token-based, no login)
-    //   portalUrl  — their permanent player portal (bookmarkable, year-round access)
-   const playerPayloads = players.map((player) => ({
+    //   signupUrl      — their unique personalised signup link (token-based, no login)
+    //   playerPageUrl  — their permanent Player page (bookmarkable, year-round access).
+    //                    THIS REVISION: renamed from portalUrl, and value fixed
+    //                    from /portal/${token} to /signup/${token} — see file
+    //                    header note.
+    const playerPayloads = players.map((player) => ({
       playerFirstName: player.first_name,   // First name only — used in email greeting
       playerEmail: player.email,
       signupUrl: `${baseUrl}/signup/${player.signup_token}`,
-      portalUrl: `${baseUrl}/portal/${player.signup_token}`,
+      playerPageUrl: `${baseUrl}/signup/${player.signup_token}`,
     }))
 
     // Send the batch. sendSignupRequestBatch handles DEV_EMAIL_OVERRIDE

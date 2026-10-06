@@ -161,6 +161,7 @@ export async function POST(request, { params }) {
         : undefined,
     }))
 
+    
   let emailResult = { sent: 0, failed: 0 }
   if (recipients.length > 0) {
     console.log(`[api/sessions/${sessionId}/cancel] sending cancellation notice to ${recipients.length} confirmed player(s)`)

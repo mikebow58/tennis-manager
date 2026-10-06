@@ -41,6 +41,7 @@ import {
   sendAddedToWaitlistNotice,
 } from '@/lib/email'
 
+
 export async function POST(request) {
   const formData = await request.formData()
   const token = formData.get('token')

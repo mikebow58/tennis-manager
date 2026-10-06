@@ -111,6 +111,7 @@ export async function POST(request, { params }) {
     playerPageUrl,
   })
 
+  
   if (!success) {
     console.error(`[players/${id}/resend-signup] POST — sendSignupRequest failed`)
     return Response.json({ error: 'Failed to send the email — try again.' }, { status: 500 })

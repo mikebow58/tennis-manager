@@ -3,43 +3,100 @@
 import { useState } from 'react'
 import { formatTime } from '@/lib/utils'
 
-// THIS REVISION (post-beta item #7 — "Confirm button UX improvement"):
-// the submit button below is relabelled from "Confirm signup" to
-// "Submit my days" and made visually more prominent (larger padding,
-// bolder text, subtle shadow) per the Project Summary Section 21 spec.
-// The button was already disabled when no days are selected as of an
-// earlier beta bug-fix pass — that behaviour is unchanged here, still
-// driven by `disabled={saving || selected.length === 0}` below.
+// THIS REVISION (Oct 30, 2026 — day-level signup):
+// SYMPTOM: on a split-location day the form showed two rows for the same
+// day (same start time, no way to tell them apart), and the venue column it
+// tried to show came from the freeform sessions.location field, which is
+// empty for sessions created from default_sessions. A player's click on one
+// row or the other also decided whether they were waitlisted.
+// ROOT CAUSE: the form rendered one row per SESSION record. Players sign up
+// for the DAY; venue assignment is decided later at court assignment.
+// FIX: the form now receives `days` (built in page.js: one entry per
+// session_date) and renders one row per day with no venue shown. Selection,
+// saved state, and statuses are keyed by day key (the session_date string).
+// On submit, the form POSTs one session_id per added day (the day's
+// primarySessionId); /api/availability resolves the real session server-side
+// and returns which one the player landed on plus confirmed/waitlisted.
+// Removal sends EVERY session id for a removed day, so it matches whichever
+// sibling row the player holds.
 //
-// THIS REVISION (post-beta item #6 — "I'm out this week"): whole-week,
-// non-rescindable opt-out added below the submit button. Always visible,
-// per organiser decision, even when day(s) are already selected — in that
-// case the click first shows an inline confirmation (not a browser
-// confirm()) since selecting it wipes the current selection. See
-// app/api/signup/[token]/opt-out/route.js for the server-side logic.
+// ALSO IN THIS REVISION:
+//   - Closes the "KNOWN GAP" from the previous revision: dayStatuses is now
+//     seeded from the server-supplied signedUpDays, so a player waitlisted
+//     on an earlier visit sees waitlisted styling when they return.
+//   - START-TIME HINT (easy to turn off): when SHOW_START_TIME_HINT is true,
+//     a single line under the intro shows the week's usual start time
+//     (e.g. "Sessions start at 9:00am"), and a day whose start time(s) differ
+//     from the usual one gets a small "Starts ..." note on its row. Set the
+//     constant below to false to show days only, with no times at all.
+//   - Waitlist wording now names the day ("Wednesday is full") instead of
+//     "This session is full".
+//
+// PROPS CHANGED: `sessions` and `signedUpSessionIds` are replaced by `days`
+// and `signedUpDays`. app/signup/[token]/page.js (also revised) is the only
+// caller; deploy both files together.
+//
+// ---------------------------------------------------------------------
+// PRIOR HISTORY (retained)
+// ---------------------------------------------------------------------
+// (post-beta item #7 — "Confirm button UX improvement"): the submit button is
+// labelled "Submit my days" and made visually prominent (larger padding,
+// bolder text, subtle shadow). It is disabled when no days are selected, via
+// `disabled={saving || selected.length === 0}` below.
+//
+// (post-beta item #6 — "I'm out this week"): whole-week, non-rescindable
+// opt-out below the submit button. Always visible, per organiser decision,
+// even when day(s) are already selected — in that case the click first shows
+// an inline confirmation (not a browser confirm()) since selecting it wipes
+// the current selection. See app/api/signup/[token]/opt-out/route.js.
 
-export default function SignupForm({ player, sessions, signedUpSessionIds }) {
-  const safeInitial = Array.isArray(signedUpSessionIds) ? signedUpSessionIds : []
-  const [selected, setSelected] = useState(safeInitial)
+// Set to false to hide ALL start-time text on the signup page (days only).
+const SHOW_START_TIME_HINT = true
+
+/**
+ * Long date label used on rows and on the confirmation screen.
+ * UTC is used because session_date is a bare date string, so a local-time
+ * parse could shift it back a day in negative-offset time zones.
+ * @param {string} sessionDate - e.g. "2026-11-04"
+ * @returns {string} e.g. "Wednesday, November 4"
+ */
+function longDateLabel(sessionDate) {
+  return new Date(sessionDate).toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  })
+}
+
+/**
+ * Weekday name only, used in the waitlist message.
+ * @param {string} sessionDate - e.g. "2026-11-04"
+ * @returns {string} e.g. "Wednesday"
+ */
+function weekdayName(sessionDate) {
+  return new Date(sessionDate).toLocaleDateString('en-US', {
+    weekday: 'long',
+    timeZone: 'UTC',
+  })
+}
+
+export default function SignupForm({ player, days, signedUpDays }) {
+  const safeDays = Array.isArray(days) ? days : []
+  const initialStatuses = signedUpDays && typeof signedUpDays === 'object' ? signedUpDays : {}
+  const initialKeys = Object.keys(initialStatuses)
+
+  // Day keys (session_date strings) currently ticked in the picker.
+  const [selected, setSelected] = useState(initialKeys)
   const [saving, setSaving] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
-  const [savedSessionIds, setSavedSessionIds] = useState(safeInitial)
+  // Day keys last saved to the server — used to work out adds and removals.
+  const [savedDayKeys, setSavedDayKeys] = useState(initialKeys)
   const [error, setError] = useState(null)
 
-  // Maps session_id -> 'confirmed' | 'waitlisted', populated from the POST
-  // response's `results` array (added this revision — see /api/availability
-  // route.js header for the server-side change this depends on).
-  //
-  // KNOWN GAP: this map is only populated after a successful POST in THIS
-  // browser session. A player who was waitlisted on a prior visit and
-  // returns later (without changing their selection, so no new POST fires)
-  // will not have their waitlisted status reflected here — sessions present
-  // in the initial signedUpSessionIds prop but absent from this map fall
-  // back to 'confirmed' styling below. Fixing this properly requires the
-  // server component that supplies signedUpSessionIds to also supply each
-  // session's current status, which is outside this file. Flagging rather
-  // than silently guessing.
-  const [sessionStatuses, setSessionStatuses] = useState({})
+  // Maps day key -> 'confirmed' | 'waitlisted'. Seeded from the server so
+  // returning visitors see their real status; updated from POST responses.
+  const [dayStatuses, setDayStatuses] = useState(initialStatuses)
 
   // Post-beta item #6 — "I'm out this week."
   const [showOptOutConfirm, setShowOptOutConfirm] = useState(false)
@@ -47,53 +104,106 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   const [optOutError, setOptOutError] = useState(null)
   const [optedOutResult, setOptedOutResult] = useState(null) // { skippedClosedSessions: [] }
 
-  function toggleSession(sessionId) {
+  // Lookup tables built from the days prop (cheap; days is small).
+  const dayByKey = {}
+  const sessionIdToDayKey = {}
+  safeDays.forEach((day) => {
+    dayByKey[day.key] = day
+    day.sessionIds.forEach((id) => {
+      sessionIdToDayKey[id] = day.key
+    })
+  })
+
+  // ------------------------------------------------------------------
+  // Start-time hint: find the most common start-time signature across days.
+  // A signature is a day's distinct start times joined with "|".
+  // ------------------------------------------------------------------
+  const signatureCounts = {}
+  safeDays.forEach((day) => {
+    const signature = day.startTimes.join('|')
+    if (signature) signatureCounts[signature] = (signatureCounts[signature] || 0) + 1
+  })
+  let modalSignature = ''
+  let modalCount = 0
+  Object.entries(signatureCounts).forEach(([signature, count]) => {
+    if (count > modalCount) {
+      modalSignature = signature
+      modalCount = count
+    }
+  })
+  // Only a single, unambiguous usual time gets the header line.
+  const headerTime =
+    SHOW_START_TIME_HINT && modalSignature && !modalSignature.includes('|')
+      ? formatTime(modalSignature)
+      : null
+
+  /**
+   * Small per-day note when a day's start time differs from the usual one
+   * (or when there is no single usual time). Empty string means no note.
+   * @param {{startTimes:string[]}} day
+   * @returns {string}
+   */
+  function timeNote(day) {
+    if (!SHOW_START_TIME_HINT || day.startTimes.length === 0) return ''
+    const signature = day.startTimes.join('|')
+    if (headerTime && signature === modalSignature) return ''
+    return `Starts ${day.startTimes.map((t) => formatTime(t)).join(' / ')}`
+  }
+
+  function toggleDay(dayKey) {
     setSelected(prev =>
-      prev.includes(sessionId)
-        ? prev.filter(id => id !== sessionId)
-        : [...prev, sessionId]
+      prev.includes(dayKey)
+        ? prev.filter(key => key !== dayKey)
+        : [...prev, dayKey]
     )
   }
 
   async function handleConfirm() {
     setSaving(true)
     setError(null)
+    console.log(`[SignupForm] submit: selected=${selected.length} saved=${savedDayKeys.length}`)
 
     try {
-      const toAdd = selected.filter(id => !savedSessionIds.includes(id))
-      const toRemove = savedSessionIds.filter(id => !selected.includes(id))
+      const daysToAdd = selected.filter(key => !savedDayKeys.includes(key))
+      const daysToRemove = savedDayKeys.filter(key => !selected.includes(key))
 
       const baseUrl = window.location.origin
 
-      if (toRemove.length > 0) {
+      if (daysToRemove.length > 0) {
+        // Send EVERY session id for each removed day so the server matches
+        // whichever sibling session the player's row is actually on.
+        const sessionIdsToRemove = daysToRemove.flatMap(key => dayByKey[key]?.sessionIds ?? [])
+
         const res = await fetch(`${baseUrl}/api/availability`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             playerId: player.id,
-            sessionIds: toRemove,
+            sessionIds: sessionIdsToRemove,
             signup_token: player.signup_token
           })
         })
         if (!res.ok) {
           const text = await res.text()
           console.error('DELETE failed:', res.status, text)
-          throw new Error('Failed to remove sessions')
+          throw new Error('Failed to remove days')
         }
-        // Clear statuses for removed sessions — they're no longer signed up.
-        setSessionStatuses(prev => {
+        // Clear statuses for removed days — they're no longer signed up.
+        setDayStatuses(prev => {
           const next = { ...prev }
-          toRemove.forEach(id => delete next[id])
+          daysToRemove.forEach(key => delete next[key])
           return next
         })
       }
 
-      if (toAdd.length > 0) {
+      if (daysToAdd.length > 0) {
         const res = await fetch(`${baseUrl}/api/availability`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(toAdd.map(sessionId => ({
-            session_id: sessionId,
+          // One entry per day: the day's primary session id. The server
+          // resolves the real session (and venue) — see lib/day-capacity.js.
+          body: JSON.stringify(daysToAdd.map(key => ({
+            session_id: dayByKey[key].primarySessionId,
             player_id: player.id,
             status: 'confirmed', // ignored server-side; server determines actual status
             signup_token: player.signup_token
@@ -102,17 +212,19 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
         if (!res.ok) {
           const text = await res.text()
           console.error('POST failed:', res.status, text)
-          throw new Error('Failed to save sessions')
+          throw new Error('Failed to save days')
         }
 
         const data = await res.json()
-        // data.results: [{ session_id, status }, ...] — capture the
-        // server's actual determination (confirmed vs waitlisted) per session.
+        // data.results: [{ requested_session_id, session_id, status }, ...].
+        // Map each result back to its day and record the server's
+        // confirmed/waitlisted determination.
         if (Array.isArray(data.results)) {
-          setSessionStatuses(prev => {
+          setDayStatuses(prev => {
             const next = { ...prev }
             data.results.forEach(r => {
-              next[r.session_id] = r.status
+              const dayKey = sessionIdToDayKey[r.requested_session_id ?? r.session_id]
+              if (dayKey) next[dayKey] = r.status
             })
             return next
           })
@@ -121,7 +233,7 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
         }
       }
 
-      setSavedSessionIds(selected)
+      setSavedDayKeys(selected)
       setConfirmed(true)
     } catch (err) {
       console.error('Signup error:', err)
@@ -201,7 +313,8 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
   }
 
   if (confirmed) {
-    const confirmedSessions = sessions.filter(s => selected.includes(s.id))
+    // Days in the order they appear on the page, filtered to the selection.
+    const confirmedDays = safeDays.filter(day => selected.includes(day.key))
 
     return (
       <div className="text-center py-8">
@@ -220,15 +333,15 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
           <p className="text-sm text-gray-400 mb-6">You are not signed up for any days this week.</p>
         ) : (
           <div className="space-y-2 mb-6 text-left">
-            {confirmedSessions.map(session => {
-              // Falls back to 'confirmed' if not present in sessionStatuses —
-              // see KNOWN GAP note above the state declaration.
-              const status = sessionStatuses[session.id] ?? 'confirmed'
+            {confirmedDays.map(day => {
+              // Falls back to 'confirmed' if the day has no recorded status.
+              const status = dayStatuses[day.key] ?? 'confirmed'
               const isWaitlisted = status === 'waitlisted'
+              const note = timeNote(day)
 
               return (
                 <div
-                  key={session.id}
+                  key={day.key}
                   className={`rounded-lg px-4 py-2.5 border ${
                     isWaitlisted
                       ? 'bg-amber-50 border-amber-200'
@@ -236,19 +349,16 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
                   }`}
                 >
                   <div className={`text-sm font-medium ${isWaitlisted ? 'text-amber-800' : 'text-green-800'}`}>
-                    {new Date(session.session_date).toLocaleDateString('en-US', {
-                      weekday: 'long',
-                      month: 'long',
-                      day: 'numeric',
-                      timeZone: 'UTC'
-                    })}
+                    {longDateLabel(day.session_date)}
                   </div>
-                  <div className={`text-xs mt-0.5 ${isWaitlisted ? 'text-amber-600' : 'text-green-600'}`}>
-                    {session.start_time ? formatTime(session.start_time) : ''} · {session.location}
-                  </div>
+                  {note && (
+                    <div className={`text-xs mt-0.5 ${isWaitlisted ? 'text-amber-600' : 'text-green-600'}`}>
+                      {note}
+                    </div>
+                  )}
                   {isWaitlisted && (
                     <div className="text-xs mt-1.5 text-amber-700 font-medium">
-                      This session is full — you've been added to the waitlist.
+                      {weekdayName(day.session_date)} is full — you've been added to the waitlist.
                       We'll let you know right away if a spot opens up.
                     </div>
                   )}
@@ -269,26 +379,27 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
 
   return (
     <div>
-      <p className="text-sm text-gray-500 mb-6">
+      <p className="text-sm text-gray-500 mb-1">
         Select the days you'd like to play this week.
       </p>
+      {headerTime && (
+        <p className="text-xs text-gray-400 mb-6">
+          Sessions start at {headerTime} unless noted.
+        </p>
+      )}
+      {!headerTime && <div className="mb-5" />}
       <div className="space-y-2 mb-8">
-        {sessions.length === 0 ? (
+        {safeDays.length === 0 ? (
           <p className="text-gray-500 text-sm">No sessions are open for signup right now.</p>
         ) : (
-          sessions.map((session) => {
-            const isSelected = selected.includes(session.id)
-            const dateLabel = new Date(session.session_date).toLocaleDateString('en-US', {
-              weekday: 'long',
-              month: 'long',
-              day: 'numeric',
-              timeZone: 'UTC'
-            })
+          safeDays.map((day) => {
+            const isSelected = selected.includes(day.key)
+            const note = timeNote(day)
 
             return (
               <div
-                key={session.id}
-                onClick={() => toggleSession(session.id)}
+                key={day.key}
+                onClick={() => toggleDay(day.key)}
                 className={`flex items-center justify-between p-4 rounded-lg border cursor-pointer transition-colors ${
                   isSelected
                     ? 'bg-green-50 border-green-300'
@@ -297,11 +408,13 @@ export default function SignupForm({ player, sessions, signedUpSessionIds }) {
               >
                 <div>
                   <div className={`font-medium text-sm ${isSelected ? 'text-green-800' : 'text-gray-900'}`}>
-                    {dateLabel}
+                    {longDateLabel(day.session_date)}
                   </div>
-                  <div className={`text-xs mt-0.5 ${isSelected ? 'text-green-600' : 'text-gray-400'}`}>
-                    {session.start_time ? formatTime(session.start_time) : ''} · {session.location}
-                  </div>
+                  {note && (
+                    <div className={`text-xs mt-0.5 ${isSelected ? 'text-green-600' : 'text-gray-400'}`}>
+                      {note}
+                    </div>
+                  )}
                 </div>
                 <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
                   isSelected ? 'bg-green-500 border-green-500' : 'border-gray-300'

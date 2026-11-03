@@ -1,43 +1,43 @@
 /**
- * daily-8am — Vercel Cron Job
+ * daily-8am -- Vercel Cron Job
  *
  * Scheduled: 08:00 MDT daily (14:00 UTC, "0 14 * * *" in vercel.json).
- * Note: will drift 1 hour early in MST (November–March). See project
- * decisions log — accepted for now, revisit before first winter season.
+ * Note: will drift 1 hour early in MST (November-March). See project
+ * decisions log -- accepted for now, revisit before first winter season.
  *
  * Three checks run every day. All three always run regardless of the
  * outcome of the others. Any combination may produce emissions.
  *
- * CHECK A — RETIRED as of a prior revision.
- *   Previously: a standalone pre-close fill-in check for Wed–Sat sessions
- *   scheduled for "tomorrow." This was never reachable in practice — by
- *   the time a Wed–Sat session's date is "tomorrow," its reminder has
- *   already fired 1–2 days earlier (per the day-of-week timing rule),
+ * CHECK A -- RETIRED as of a prior revision.
+ *   Previously: a standalone pre-close fill-in check for Wed-Sat sessions
+ *   scheduled for "tomorrow." This was never reachable in practice -- by
+ *   the time a Wed-Sat session's date is "tomorrow," its reminder has
+ *   already fired 1-2 days earlier (per the day-of-week timing rule),
  *   which also flips sessions.status from 'open' to 'closed'. Check A's
- *   query filtered on status = 'open', so it could never match a Wed–Sat
+ *   query filtered on status = 'open', so it could never match a Wed-Sat
  *   session in the wild. This was a timing assumption baked into the
  *   original Phase 1 cron map that was never reconciled against the
  *   reminder-timing rule once that rule was finalised.
  *
  *   FIX: the initial sub-request broadcast now fires from inside Check B,
  *   immediately after Procedure 1 determines a session closed short
- *   (Outcome B) — for every day of week, including Mon/Tue. This replaces
+ *   (Outcome B) -- for every day of week, including Mon/Tue. This replaces
  *   Check A entirely. See Step 5.5 inside Check B below.
  *
  *   KNOWN FOLLOW-UP NOT YET FIXED: daily_10am_fillin_expansion still
  *   expects sessions.session_date = tomorrow relative to when the
  *   first_call sub_requests row was sent. That still holds for Mon/Tue
- *   (reminder fires 1 day prior). It no longer holds for Wed–Sat (reminder
+ *   (reminder fires 1 day prior). It no longer holds for Wed-Sat (reminder
  *   now fires 2 days prior from this new broadcast point), so the 10am
- *   expansion cron will not find and expand Wed–Sat first_call requests
+ *   expansion cron will not find and expand Wed-Sat first_call requests
  *   sent here. Needs a follow-up fix before the waitlist-first check
- *   (Phase 4) can be considered fully reliable for Wed–Sat sessions.
+ *   (Phase 4) can be considered fully reliable for Wed-Sat sessions.
  *
- * CHECK B — Reminder sends. THIS REVISION: restructured from a single pass
- *   into two passes (see below) to fix a multi-location roster-in-reminder
+ * CHECK B -- Reminder sends. Restructured from a single pass into two
+ *   passes (see below) to fix a multi-location roster-in-reminder
  *   timing bug (post-beta item #5).
  *
- *   PASS 1 — Procedure 1 for every due-today session:
+ *   PASS 1 -- Procedure 1 for every due-today session:
  *     For each session whose reminder is due today, runs Procedure 1
  *     (initial court balancing) and writes the resulting confirmed/tentative
  *     split to the availability table. No emails are sent in this pass and
@@ -45,26 +45,34 @@
  *     nothing left to do and is closed immediately). Results are kept in
  *     memory for Pass 2.
  *
- *   PASS 2 — Roster building, broadcasts, sends, close:
+ *   PASS 2 -- Roster building, broadcasts, sends, close:
  *     Only begins after every session in Pass 1 has been fully processed.
  *     This ordering guarantee is the actual fix: on a multi-location day,
  *     Session A's reminder email can safely include Session B's confirmed
  *     roster, because by the time Pass 2 runs, B's Procedure 1 has already
- *     completed and committed — there's no possibility of listing a player
+ *     completed and committed -- there's no possibility of listing a player
  *     who is about to be (or already was, in the same run) demoted to
  *     tentative. A single-pass design couldn't guarantee this, since
  *     sessions aren't queried in a defined order and Session A could be
  *     processed before Session B ever reaches Procedure 1.
  *
  *     For each session: fires the initial sub-request broadcast if closed
- *     short (Step 5.5), builds the roster list (if the organiser's
- *     Communication setting is on — see lib/admin-settings.js
+ *     short (Step 5.5), builds the roster list (if the organizer's
+ *     Communication setting is on -- see lib/admin-settings.js
  *     getIncludeRosterInReminder), sends tiered reminder emails, and closes
  *     the session.
  *
- * CHECK C — Week close:
+ * CHECK C -- Week close:
  *   Finds weeks in 'sent' status where all child sessions have passed
  *   their start time and transitions them to 'closed'.
+ *   KNOWN ISSUE (found Oct 30, 2026, NOT fixed in this revision -- outside
+ *   the split-day venue sweep): the "session has started" test builds
+ *   new Date(`${session_date}T${start_time}Z`), which treats a Mountain-time
+ *   start_time as if it were UTC. An 8:00am MDT session is therefore
+ *   considered started at 02:00 MDT, so on the Saturday-morning run the week
+ *   can close before the Saturday session happens, rather than Sunday
+ *   morning as Phase 2 Section 3.5 intends. Low impact today; needs a
+ *   proper America/Denver conversion.
  *
  * Tables read:  weeks, sessions, availability, players, locations,
  *               admin_settings
@@ -74,42 +82,65 @@
  *                 weeks (status, closed_at)
  *
  * Emails sent:
- *   - Confirmed players: sendConfirmedReminderBatch (Check B Pass 2) —
- *     now optionally includes the roster of confirmed players (post-beta
+ *   - Confirmed players: sendConfirmedReminderBatch (Check B Pass 2) --
+ *     optionally includes the roster of confirmed players (post-beta
  *     item #5)
- *   - Tentative players: sendTentativeReminderBatch (Check B Pass 2) —
+ *   - Tentative players: sendTentativeReminderBatch (Check B Pass 2) --
  *     never includes the roster; the tiered reminder system's own design
- *     principle keeps this message status-only (Automation Logic §2.1)
+ *     principle keeps this message status-only (Automation Logic 2.1)
  *   - First Call players: sendSubRequestBroadcast (Check B Pass 2, Step
- *     5.5, real player-facing confirm/decline email — only if session
+ *     5.5, real player-facing confirm/decline email -- only if session
  *     closed short and the First Call pool is non-empty)
  *
+ * REVISION (Oct 30, 2026 -- split-location day sweep):
+ *   SYMPTOM: confirmed reminders and the Step 5.5 First Call broadcast named
+ *   a venue (session.locations.name, falling back to the literal text "TBD")
+ *   even on a split-location day, where the venue a player will actually
+ *   play at is not known until court assignment is approved/sent.
+ *   ROOT CAUSE: Automation Logic 2.1 specifies that multi-location confirmed
+ *   reminders withhold location details until court assignment, but this
+ *   cron never implemented that -- it always used the session's own venue.
+ *   On a split day greedy fill decides which session record a player lands
+ *   on, so that venue was effectively arbitrary and could change at
+ *   assignment.
+ *   FIX: locationName now comes from getVenueForEmail(session.id)
+ *   (lib/day-capacity.js), which returns null on split days and on any query
+ *   error (fails safe). It is resolved once per session at the top of the
+ *   Pass 2 loop and reused by Step 5.5 and Step 7. The old `?? 'TBD'`
+ *   fallbacks are gone on purpose -- they would have turned a null venue
+ *   into the literal word "TBD". lib/email.js omits the venue and adds a
+ *   "court and location will be sent by..." line when locationName is null;
+ *   the confirmed payload now also carries deadlineLabel for that line.
+ *   A single-session day whose session has no location now omits the venue
+ *   rather than printing "TBD".
+ *
  * NOTE (cross-gender skill normalization, August 2026): the players select
- * in Step 2 below now includes `gender`, so resolveSkill() (lib/court-
+ * in Step 2 below includes `gender`, so resolveSkill() (lib/court-
  * balancing.js) can apply the fixed cross-gender comparison adjustment for
  * female players when Procedure 1 balances courts. See lib/court-balancing.js
- * for the full explanation. No other logic in this file changes — the
+ * for the full explanation. No other logic in this file changes -- the
  * adjustment is entirely internal to resolveSkill().
  *
- * THIS REVISION (Sept 2026 session — Player page build):
+ * PRIOR REVISION (Sept 2026 session -- Player page build):
  *   Step 7's per-player email payloads had a bug independent of the
  *   deferred /portal route build: cancelUrl was constructed as
  *   `${baseUrl}/portal/${signupToken}` for both confirmed and tentative
  *   players, but a per-session CANCEL action needs the real cancel route
  *   `/cancel/${signupToken}/${sessionId}` (confirmed correct usage
- *   elsewhere in this codebase — see lib/sub-requests.js). Fixed here.
- *   Also added playerPageUrl (`/signup/${signupToken}` — the permanent,
- *   non-rotating "Player page," per organiser decision, state handoff
+ *   elsewhere in this codebase -- see lib/sub-requests.js). Fixed here.
+ *   Also added playerPageUrl (`/signup/${signupToken}` -- the permanent,
+ *   non-rotating "Player page," per organizer decision, state handoff
  *   Sept 11 2026) to both payloads, rendered as a bookmark-style footer
  *   link by lib/email.js's shared buildFooterHtml() helper.
  *
  * References:
- *   Phase 1 Cron Map — Section 4.5 (Check B) and Section 4.5 (Check C)
- *   Phase 2 State Machines — Section 4.4 (Procedure 1), Section 4.2
- *   Automation Logic — Section 2.1 (tiered reminder system), Section 12
- *     (cancellation and sub request logic — subsNeeded formula reused here)
- *   Project Summary — Section 21, "Roster in reminder email" (post-beta
+ *   Phase 1 Cron Map -- Section 4.5 (Check B) and Section 4.5 (Check C)
+ *   Phase 2 State Machines -- Section 4.4 (Procedure 1), Section 4.2
+ *   Automation Logic -- Section 2.1 (tiered reminder system), Section 12
+ *     (cancellation and sub request logic -- subsNeeded formula reused here)
+ *   Project Summary -- Section 21, "Roster in reminder email" (post-beta
  *     item #5)
+ *   Oct 30, 2026 state handoff -- split-location day governing rule
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -122,6 +153,7 @@ import { runProcedure1, resolveSkill, SKILL_SELF_TO_ADMIN } from '@/lib/court-ba
 import { buildTargetingPool } from '@/lib/targeting'
 import { getAdminEmail, getIncludeRosterInReminder } from '@/lib/admin-settings'
 import { computeBroadcastDeadlineLabel } from '@/lib/sub-requests'
+import { getVenueForEmail } from '@/lib/day-capacity'
 
 export async function GET(request) {
   // Record entry time so execution duration is calculable from logs.
@@ -134,7 +166,7 @@ export async function GET(request) {
   // ------------------------------------------------------------------
   const authHeader = request.headers.get('authorization')
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    console.warn('[daily-8am] Unauthorised request — missing or invalid CRON_SECRET')
+    console.warn('[daily-8am] Unauthorised request -- missing or invalid CRON_SECRET')
     return new Response('Unauthorised', { status: 401 })
   }
 
@@ -165,14 +197,14 @@ export async function GET(request) {
 
   console.log('[daily-8am] Today (MT):', todayStr, '| Tomorrow (MT):', tomorrowStr)
 
-  // Resolve the organiser email once up front — used by both Check B's
+  // Resolve the organizer email once up front -- used by both Check B's
   // Step 5.5 stub broadcast and available for future use in this file.
   const adminEmail = await getAdminEmail()
   if (!adminEmail) {
-    console.error('[daily-8am] getAdminEmail() returned no value — organiser alerts will be skipped where applicable')
+    console.error('[daily-8am] getAdminEmail() returned no value -- organizer alerts will be skipped where applicable')
   }
 
-  // Resolve the roster-in-reminder Communication setting once up front —
+  // Resolve the roster-in-reminder Communication setting once up front --
   // read once per cron run rather than per session, since it can't change
   // mid-run and re-reading per session would just be wasted queries.
   const includeRosterInReminder = await getIncludeRosterInReminder()
@@ -182,11 +214,11 @@ export async function GET(request) {
   const outcomes = { checkA: null, checkB: null, checkC: null }
 
   // ==================================================================
-  // CHECK A — RETIRED.
+  // CHECK A -- RETIRED.
   //
-  // Previously ran a standalone pre-close fill-in check for Wed–Sat
+  // Previously ran a standalone pre-close fill-in check for Wed-Sat
   // sessions dated "tomorrow." Removed because it could never match a
-  // real session — see file header comment for the full explanation.
+  // real session -- see file header comment for the full explanation.
   // Its useful logic (targeting pool build, sub_requests insert,
   // sub_request_recipients insert, stub broadcast) has been folded into
   // Check B, Step 5.5 below, which fires at the correct moment: the
@@ -194,18 +226,18 @@ export async function GET(request) {
   // ==================================================================
   outcomes.checkA = {
     status: 'retired',
-    note: 'Folded into Check B Step 5.5 — see file header comment.',
+    note: 'Folded into Check B Step 5.5 -- see file header comment.',
   }
   console.log('[daily-8am] Check A: retired. Logic now lives in Check B Step 5.5.')
 
   // ==================================================================
-  // CHECK B — Reminder sends (two-pass — see file header comment)
+  // CHECK B -- Reminder sends (two-pass -- see file header comment)
   // ==================================================================
   console.log('[daily-8am] Check B: starting reminder send check.')
 
   try {
     // Fetch all open, un-reminded, non-cancelled sessions across all
-    // weeks currently in 'sent' status. match_type is included — required
+    // weeks currently in 'sent' status. match_type is included -- required
     // by buildTargetingPool in Step 5.5.
     const { data: openSessions, error: sessionsError } = await supabaseAdmin
       .from('sessions')
@@ -239,12 +271,12 @@ export async function GET(request) {
 
       // Pass 1 results, keyed by session id. Only sessions that make it
       // all the way through Pass 1 successfully (Procedure 1 ran, DB
-      // writes succeeded) get an entry here — those are the only ones
+      // writes succeeded) get an entry here -- those are the only ones
       // Pass 2 will process.
       const pass1Results = new Map()
 
       // ================================================================
-      // PASS 1 — Procedure 1 for every due-today session.
+      // PASS 1 -- Procedure 1 for every due-today session.
       // No emails sent here. No sessions closed here (except the
       // zero-signup case, which has nothing left for Pass 2 to do).
       // ================================================================
@@ -268,26 +300,26 @@ export async function GET(request) {
         const reminderDateStr = toMountainDateStr(reminderDate)
 
         if (reminderDateStr !== todayStr) {
-          // Reminder not due today — skip this session. Expected on
+          // Reminder not due today -- skip this session. Expected on
           // Friday and Saturday mornings when no reminder is due.
           console.log(
             `[daily-8am] Check B Pass 1: session ${session.id} (${session.session_date}) ` +
-            `dayOfWeek=${dayOfWeek} daysPrior=${daysPrior} reminderDue=${reminderDateStr} today=${todayStr} — skipping.`
+            `dayOfWeek=${dayOfWeek} daysPrior=${daysPrior} reminderDue=${reminderDateStr} today=${todayStr} -- skipping.`
           )
           continue
         }
 
         console.log(
           `[daily-8am] Check B Pass 1: session ${session.id} (${session.session_date}) ` +
-          `reminder due today — proceeding with Procedure 1.`
+          `reminder due today -- proceeding with Procedure 1.`
         )
 
         // ----------------------------------------------------------------
         // Step 2: Fetch all signed-up players for this session.
-        // All players are currently in 'confirmed' status at this point —
+        // All players are currently in 'confirmed' status at this point --
         // 'tentative' is a Procedure 1 output, not set at signup time.
-        // last_name is included — required to build "First L." roster
-        // entries in Pass 2 (post-beta item #5). gender is included — used
+        // last_name is included -- required to build "First L." roster
+        // entries in Pass 2 (post-beta item #5). gender is included -- used
         // by resolveSkill() (lib/court-balancing.js) for the cross-gender
         // comparison adjustment applied during Procedure 1's balancing.
         // ----------------------------------------------------------------
@@ -326,13 +358,13 @@ export async function GET(request) {
         )
 
         if (playerCount === 0) {
-          // No players signed up — close the session without sending any
+          // No players signed up -- close the session without sending any
           // reminders or firing a sub request. Nobody was ever confirmed,
           // so there's no tentative player and nothing to broadcast for.
-          // Nothing for Pass 2 to do — closed immediately, not added to
+          // Nothing for Pass 2 to do -- closed immediately, not added to
           // pass1Results.
           console.log(
-            `[daily-8am] Check B Pass 1: session ${session.id} has 0 players — closing with no reminders.`
+            `[daily-8am] Check B Pass 1: session ${session.id} has 0 players -- closing with no reminders.`
           )
           await supabaseAdmin
             .from('sessions')
@@ -345,9 +377,9 @@ export async function GET(request) {
         // ----------------------------------------------------------------
         // Step 3: Resolve each player's effective skill level.
         // resolveSkill() applies the cross-gender comparison adjustment
-        // internally (see lib/court-balancing.js) — the resulting .skill
+        // internally (see lib/court-balancing.js) -- the resulting .skill
         // value here is comparison-only and never displayed to players
-        // or the organiser.
+        // or the organizer.
         // ----------------------------------------------------------------
         const players = availability.map((avail) => ({
           availabilityId: avail.id,
@@ -361,13 +393,13 @@ export async function GET(request) {
         }))
 
         // ----------------------------------------------------------------
-        // Step 4: Run Procedure 1 — Initial Court Balancing.
+        // Step 4: Run Procedure 1 -- Initial Court Balancing.
         // ----------------------------------------------------------------
         const { confirmedIds: confirmedPlayerIds, tentativeCount, bestScore, courtsCount } =
           runProcedure1(players)
 
         console.log(
-          `[daily-8am] Check B Pass 1: Procedure 1 for session ${session.id} — ${playerCount} players, ` +
+          `[daily-8am] Check B Pass 1: Procedure 1 for session ${session.id} -- ${playerCount} players, ` +
           `${courtsCount} full court(s), ${tentativeCount} tentative. ` +
           `bestScore=${bestScore}`
         )
@@ -403,7 +435,7 @@ export async function GET(request) {
             writeFailed = true
           } else {
             console.log(
-              `[daily-8am] Check B Pass 1: session ${session.id} — ${tentativeAvailIds.length} player(s) set to tentative.`
+              `[daily-8am] Check B Pass 1: session ${session.id} -- ${tentativeAvailIds.length} player(s) set to tentative.`
             )
           }
         }
@@ -425,14 +457,14 @@ export async function GET(request) {
         }
 
         if (writeFailed) {
-          // Do not add to pass1Results — if we can't write status we
+          // Do not add to pass1Results -- if we can't write status we
           // shouldn't send reminders or include this session in any
           // sibling's combined roster, as players would receive the
           // wrong message tier or an inaccurate roster.
           continue
         }
 
-        // Success — store everything Pass 2 needs, including this
+        // Success -- store everything Pass 2 needs, including this
         // session's own record (for week_id/session_date day-grouping,
         // locations, notes, etc.) and sessionDate (avoids recomputing).
         pass1Results.set(session.id, {
@@ -451,7 +483,7 @@ export async function GET(request) {
 
       // ================================================================
       // Build the day-grouping map used for multi-location combined
-      // rosters. Only built after Pass 1 has fully finished — this is
+      // rosters. Only built after Pass 1 has fully finished -- this is
       // the ordering guarantee that fixes the roster timing bug (see
       // file header comment).
       // ================================================================
@@ -463,9 +495,9 @@ export async function GET(request) {
       }
 
       // ================================================================
-      // PASS 2 — Sub-request broadcasts, roster building, reminder sends,
+      // PASS 2 -- Sub-request broadcasts, roster building, reminder sends,
       // session close. Every pass1Results entry reflects committed,
-      // final Procedure 1 output for every due-today session — including
+      // final Procedure 1 output for every due-today session -- including
       // siblings on multi-location days.
       // ================================================================
       console.log('[daily-8am] Check B Pass 2: broadcasts, roster building, and sends.')
@@ -481,12 +513,26 @@ export async function GET(request) {
         } = result
 
         // ----------------------------------------------------------------
-        // Step 5.5 — Fire the initial sub-request broadcast if this
+        // Venue for player-facing emails (Oct 30, 2026 revision).
+        // null on a split-location day (venue unknown until court
+        // assignment) and on any query error. Called once per session and
+        // reused by Step 5.5 and Step 7. getVenueForEmail deliberately
+        // ignores reminder_sent_at, so it still sees the sibling session
+        // after the first one has been closed earlier in this loop.
+        // ----------------------------------------------------------------
+        const { locationName } = await getVenueForEmail(session.id)
+        console.log(
+          `[daily-8am] Check B Pass 2: session ${session.id} -- venue for emails: ` +
+          `${locationName ?? '(withheld -- split day or lookup error)'}`
+        )
+
+        // ----------------------------------------------------------------
+        // Step 5.5 -- Fire the initial sub-request broadcast if this
         // session closed short.
         //
-        // Fires for every day of week (Mon–Sat), per explicit decision —
+        // Fires for every day of week (Mon-Sat), per explicit decision --
         // Mon/Tue sessions closing short go straight to broadcast just
-        // like Wed–Sat, rather than being excluded the way pre-close
+        // like Wed-Sat, rather than being excluded the way pre-close
         // fill-in logic used to exclude them (Automation Logic Section
         // 6.2's Mon/Tue exclusion applied to the old PRE-close targeted
         // send; this is a post-close initial broadcast and applies
@@ -497,10 +543,10 @@ export async function GET(request) {
         // ----------------------------------------------------------------
         if (tentativeAvailIds.length > 0) {
           let subsNeeded = (4 - (tentativeAvailIds.length % 4)) % 4
-          if (subsNeeded === 0) subsNeeded = 4 // safety fallback — should not occur given tentativeAvailIds.length > 0
+          if (subsNeeded === 0) subsNeeded = 4 // safety fallback -- should not occur given tentativeAvailIds.length > 0
 
           console.log(
-            `[daily-8am] Check B Pass 2 Step 5.5: session ${session.id} closed short — ` +
+            `[daily-8am] Check B Pass 2 Step 5.5: session ${session.id} closed short -- ` +
             `tentativeCount=${tentativeAvailIds.length} subsNeeded=${subsNeeded}. Firing initial broadcast.`
           )
 
@@ -513,7 +559,6 @@ export async function GET(request) {
 
           const rosterSkills = players.map((p) => p.skill)
           const sessionMatchType = session.match_type ?? 'doubles'
-          const locationName = session.locations?.name ?? 'TBD'
 
           const { firstCallPool } = await buildTargetingPool({
             sessionId: session.id,
@@ -523,10 +568,10 @@ export async function GET(request) {
           })
 
           console.log(
-            `[daily-8am] Check B Pass 2 Step 5.5: session ${session.id} — firstCallPool size=${firstCallPool.length}`
+            `[daily-8am] Check B Pass 2 Step 5.5: session ${session.id} -- firstCallPool size=${firstCallPool.length}`
           )
 
-          // Insert sub_requests record. request_type = 'first_call' — this
+          // Insert sub_requests record. request_type = 'first_call' -- this
           // session still has 1-2 days of lead time before the deadline
           // (6pm day prior), so First Call targeting is still appropriate
           // here rather than going straight to all_available.
@@ -580,16 +625,17 @@ export async function GET(request) {
               }
             } else {
               console.log(
-                `[daily-8am] Check B Pass 2 Step 5.5: no First Call players in pool — ` +
+                `[daily-8am] Check B Pass 2 Step 5.5: no First Call players in pool -- ` +
                 `sub_requests record created but no recipients inserted.`
               )
             }
 
-            // Real player-facing broadcast — firstCallPool entries already
+            // Real player-facing broadcast -- firstCallPool entries already
             // carry firstName/email/signupToken (buildPlayerPayload, lib/
             // targeting.js), the exact shape sendSubRequestBroadcast expects.
-            // No adminEmail gate here — this send doesn't depend on the
-            // organiser email being configured.
+            // No adminEmail gate here -- this send doesn't depend on the
+            // organizer email being configured. locationName is null on
+            // split days; sendSubRequestBroadcast omits the venue then.
             if (firstCallPool.length > 0) {
               const sessionDateLabelForBroadcast = sessionDate.toLocaleDateString('en-US', {
                 weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
@@ -606,7 +652,7 @@ export async function GET(request) {
               )
             } else {
               console.log(
-                `[daily-8am] Check B Pass 2 Step 5.5: no First Call players in pool for session ${session.id} — ` +
+                `[daily-8am] Check B Pass 2 Step 5.5: no First Call players in pool for session ${session.id} -- ` +
                 `no broadcast email sent (sub_requests record created with zero recipients).`
               )
             }
@@ -615,22 +661,22 @@ export async function GET(request) {
           }
         } else {
           console.log(
-            `[daily-8am] Check B Pass 2 Step 5.5: session ${session.id} closed full — no broadcast needed.`
+            `[daily-8am] Check B Pass 2 Step 5.5: session ${session.id} closed full -- no broadcast needed.`
           )
         }
 
         // ----------------------------------------------------------------
-        // Step 6 — Build roster list (post-beta item #5), if enabled.
+        // Step 6 -- Build roster list (post-beta item #5), if enabled.
         //
         // Combines confirmed players from every session sharing this day
-        // (same week_id + session_date) — the "full combined roster on
+        // (same week_id + session_date) -- the "full combined roster on
         // multi-location days" requirement. Deduped by player_id (defensive
-        // — a player shouldn't normally have confirmed availability on two
+        // -- a player shouldn't normally have confirmed availability on two
         // sibling sessions the same day, but combining is done safely
         // either way). Sorted alphabetically by first name, formatted as
-        // "First L.". Confirmed-tier only — never attached to the
+        // "First L.". Confirmed-tier only -- never attached to the
         // tentative reminder, per the tiered reminder system's own design
-        // principle (Automation Logic §2.1: tentative stays status-only).
+        // principle (Automation Logic 2.1: tentative stays status-only).
         // ----------------------------------------------------------------
         let rosterNames = []
         if (includeRosterInReminder) {
@@ -662,7 +708,7 @@ export async function GET(request) {
           })
 
           console.log(
-            `[daily-8am] Check B Pass 2: session ${session.id} — roster built with ` +
+            `[daily-8am] Check B Pass 2: session ${session.id} -- roster built with ` +
             `${rosterNames.length} name(s) across ${daySiblings.length} sibling session(s).`
           )
         }
@@ -670,11 +716,15 @@ export async function GET(request) {
         // ----------------------------------------------------------------
         // Step 7: Build and send tiered reminder emails.
         //
-        // THIS REVISION: cancelUrl fixed from `/portal/${signupToken}` to
-        // the real per-session cancel route `/cancel/${signupToken}/
-        // ${session.id}` (see file header bug note). playerPageUrl added
-        // pointing at `/signup/${signupToken}` — the permanent Player
-        // page — rendered as a bookmark footer link by lib/email.js.
+        // cancelUrl is the real per-session cancel route `/cancel/${token}/
+        // ${session.id}` (Sept 2026 fix -- see file header). playerPageUrl
+        // points at `/signup/${token}` -- the permanent Player page --
+        // rendered as a bookmark footer link by lib/email.js.
+        //
+        // Oct 30, 2026: locationName (resolved at the top of this loop) is
+        // null on split days, and deadlineLabel is now passed on the
+        // confirmed payload so lib/email.js can say when court and location
+        // details will arrive.
         // ----------------------------------------------------------------
         const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
@@ -693,8 +743,6 @@ export async function GET(request) {
               timeZone: 'UTC',
             })
           : 'TBD'
-
-        const locationName = session.locations?.name ?? 'TBD'
 
         const deadlineDate = new Date(sessionDate)
         deadlineDate.setUTCDate(sessionDate.getUTCDate() - 1)
@@ -715,11 +763,12 @@ export async function GET(request) {
             playerEmail: p.email,
             sessionDate: sessionDateLabel,
             startTime: startTimeLabel,
-            locationName,
+            locationName, // null on split days -- email omits venue
+            deadlineLabel, // used for the "location will be sent by..." line
             notes: session.notes ?? null,
             cancelUrl: `${baseUrl}/cancel/${p.signupToken}/${session.id}`,
             playerPageUrl: `${baseUrl}/signup/${p.signupToken}`,
-            rosterNames, // post-beta item #5 — empty array if setting is off
+            rosterNames, // post-beta item #5 -- empty array if setting is off
           }))
 
         const tentativePlayers = players
@@ -731,27 +780,27 @@ export async function GET(request) {
             deadlineLabel,
             cancelUrl: `${baseUrl}/cancel/${p.signupToken}/${session.id}`,
             playerPageUrl: `${baseUrl}/signup/${p.signupToken}`,
-            // No rosterNames — tentative reminder stays status-only.
+            // No rosterNames -- tentative reminder stays status-only.
           }))
 
         if (confirmedPlayers.length > 0) {
           console.log(
-            `[daily-8am] Check B Pass 2: session ${session.id} — sending ${confirmedPlayers.length} confirmed reminder(s).`
+            `[daily-8am] Check B Pass 2: session ${session.id} -- sending ${confirmedPlayers.length} confirmed reminder(s).`
           )
           const { sent, failed } = await sendConfirmedReminderBatch(confirmedPlayers)
           console.log(
-            `[daily-8am] Check B Pass 2: session ${session.id} — confirmed reminders: sent ${sent}, failed ${failed}.`
+            `[daily-8am] Check B Pass 2: session ${session.id} -- confirmed reminders: sent ${sent}, failed ${failed}.`
           )
           totalConfirmed += sent
         }
 
         if (tentativePlayers.length > 0) {
           console.log(
-            `[daily-8am] Check B Pass 2: session ${session.id} — sending ${tentativePlayers.length} tentative reminder(s).`
+            `[daily-8am] Check B Pass 2: session ${session.id} -- sending ${tentativePlayers.length} tentative reminder(s).`
           )
           const { sent, failed } = await sendTentativeReminderBatch(tentativePlayers)
           console.log(
-            `[daily-8am] Check B Pass 2: session ${session.id} — tentative reminders: sent ${sent}, failed ${failed}.`
+            `[daily-8am] Check B Pass 2: session ${session.id} -- tentative reminders: sent ${sent}, failed ${failed}.`
           )
           totalTentative += sent
         }
@@ -769,7 +818,7 @@ export async function GET(request) {
 
         if (closeError) {
           console.error(
-            `[daily-8am] Check B Pass 2: CRITICAL — emails sent but failed to close session ${session.id}:`,
+            `[daily-8am] Check B Pass 2: CRITICAL -- emails sent but failed to close session ${session.id}:`,
             closeError.message
           )
         } else {
@@ -794,7 +843,7 @@ export async function GET(request) {
   }
 
   // ==================================================================
-  // CHECK C — Week close
+  // CHECK C -- Week close
   // ==================================================================
   console.log('[daily-8am] Check C: starting week close check.')
 
@@ -822,7 +871,7 @@ export async function GET(request) {
 
         if (sessions.length === 0) {
           console.warn(
-            `[daily-8am] Check C: week ${week.id} has no sessions — skipping.`
+            `[daily-8am] Check C: week ${week.id} has no sessions -- skipping.`
           )
           continue
         }
@@ -831,6 +880,8 @@ export async function GET(request) {
           if (!session.session_date || !session.start_time) {
             return false
           }
+          // KNOWN ISSUE (see file header): start_time is Mountain time but
+          // is parsed here as UTC.
           const sessionStart = new Date(
             `${session.session_date}T${session.start_time}Z`
           )
@@ -839,14 +890,14 @@ export async function GET(request) {
 
         if (!allPassed) {
           console.log(
-            `[daily-8am] Check C: week ${week.id} (${week.week_start_date}) — ` +
+            `[daily-8am] Check C: week ${week.id} (${week.week_start_date}) -- ` +
             `not all sessions have passed. Not closing yet.`
           )
           continue
         }
 
         console.log(
-          `[daily-8am] Check C: week ${week.id} (${week.week_start_date}) — ` +
+          `[daily-8am] Check C: week ${week.id} (${week.week_start_date}) -- ` +
           `all sessions passed. Closing week.`
         )
 

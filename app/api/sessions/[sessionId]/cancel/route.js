@@ -1,8 +1,8 @@
 // app/api/sessions/[sessionId]/cancel/route.js
 //
 // POST /api/sessions/[sessionId]/cancel — cancels a session in place. This
-// is the organiser's simplified cancellation design (Option D, agreed in
-// this session — see Project Summary Section 21 "Session cancellation
+// is the organizer's simplified cancellation design (Option D, agreed in
+// an earlier session — see Project Summary Section 21 "Session cancellation
 // reason" for the original, larger-scope spec this replaces):
 //
 //   - Sets sessions.cancelled_at + sessions.cancellation_note (optional
@@ -13,7 +13,7 @@
 //   - Closes any active sub_requests row for this session (no filled_at —
 //     the spot wasn't filled, the session was cancelled out from under it).
 //   - Emails CONFIRMED players only, with the optional reason included.
-//     Tentative and waitlisted players are NOT emailed — organiser decision:
+//     Tentative and waitlisted players are NOT emailed — organizer decision:
 //     they've already been told their status is provisional and aren't
 //     expecting to play unless/until told otherwise, so a cancellation
 //     notice would be redundant.
@@ -25,19 +25,43 @@
 // changes needed.
 //
 // Callers must independently ensure new signups are rejected against a
-// cancelled session — see the cancelled_at guards added to
+// cancelled session — see the cancelled_at guards in
 // app/api/availability/route.js (player-facing) and
-// app/api/admin/availability/route.js (organiser manual add) in this same
-// revision. This route does not itself prevent future signups; it only
-// marks the session and notifies existing confirmed players.
+// app/api/admin/availability/route.js (organizer manual add). This route
+// does not itself prevent future signups; it only marks the session and
+// notifies existing confirmed players.
 //
-// THIS REVISION (Sept 2026 session — Player page build): added
-// signup_token to the confirmed-players select below (it wasn't selected
-// at all previously) so each recipient can get a playerPageUrl
-// (`/signup/${token}` — the permanent Player page, per organiser
-// decision), rendered as a bookmark-style footer link by lib/email.js's
-// shared buildFooterHtml() helper. Completes the playerPageUrl wiring for
-// this caller.
+// REVISION (Oct 30, 2026 — split-location day sweep; design decision made
+// with Mikel: "option 1, day-level wording"):
+//   SYMPTOM: the cancellation notice said "your tennis session on <date> at
+//   <venue> has been cancelled" (venue falling back to the literal text
+//   "TBD") even on a split-location day, where players signed up for the
+//   DAY and were never told which venue their session record was at.
+//   DECISION: when the organizer cancels one session on a split day, only
+//   the confirmed players on THAT session record are notified (exactly as
+//   before — this route only ever notified the cancelled session's own
+//   confirmed players), and the wording is day-level with no venue.
+//   FIX: venue now comes from getVenueForEmail(sessionId)
+//   (lib/day-capacity.js), which returns null on split days and on any
+//   query error; sendSessionCancellationNotice omits the "at <venue>"
+//   wording when null. The `locations ( name )` join is dropped and the
+//   '?? "TBD"' fallback is removed on purpose. Single-session days are
+//   unchanged (the venue is still named).
+//   ORDERING MATTERS: getVenueForEmail decides "split day" by counting the
+//   day's NON-CANCELLED sessions. This route sets cancelled_at in Step 2,
+//   so the venue MUST be resolved BEFORE that write — afterwards, a split
+//   day with one session cancelled would look like a single-session day and
+//   the notice would name a venue. That is why the lookup is in Step 1.
+//   KNOWN CAVEAT (not changed): a player on the cancelled record is told
+//   their session is cancelled even though the sibling session for the same
+//   day is still running, and this route does not move them there. The
+//   organizer can add them to the sibling via the admin UI if wanted.
+//
+// PRIOR REVISION (Sept 2026 session — Player page build): signup_token is
+// selected for the confirmed players below so each recipient can get a
+// playerPageUrl (`/signup/${token}` — the permanent Player page, per
+// organizer decision), rendered as a bookmark-style footer link by
+// lib/email.js's shared buildFooterHtml() helper.
 //
 // Tables read:  sessions, availability, sub_requests
 // Tables written: sessions (cancelled_at, cancellation_note),
@@ -45,6 +69,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { sendSessionCancellationNotice } from '@/lib/email'
+import { getVenueForEmail } from '@/lib/day-capacity'
 
 export async function POST(request, { params }) {
   const { sessionId } = await params
@@ -65,7 +90,7 @@ export async function POST(request, { params }) {
   // ------------------------------------------------------------------
   const { data: session, error: sessionError } = await supabaseAdmin
     .from('sessions')
-    .select('id, session_date, start_time, cancelled_at, locations ( name )')
+    .select('id, session_date, start_time, cancelled_at')
     .eq('id', sessionId)
     .single()
 
@@ -78,6 +103,11 @@ export async function POST(request, { params }) {
     console.warn(`[api/sessions/${sessionId}/cancel] already cancelled at ${session.cancelled_at} — rejecting`)
     return Response.json({ error: 'Session is already cancelled' }, { status: 400 })
   }
+
+  // Oct 30, 2026: resolve the venue for the notice NOW, before Step 2
+  // marks this session cancelled — see "ORDERING MATTERS" in the file
+  // header. null on split-location days or lookup error.
+  const { locationName } = await getVenueForEmail(sessionId)
 
   // ------------------------------------------------------------------
   // Step 2: Mark the session cancelled. This is the field every cron
@@ -120,9 +150,8 @@ export async function POST(request, { params }) {
 
   // ------------------------------------------------------------------
   // Step 4: Fetch CONFIRMED players only — tentative and waitlisted are
-  // deliberately excluded per organiser decision (see file header).
-  // signup_token added (Sept 2026 — Player page build) so each recipient
-  // can get a playerPageUrl below.
+  // deliberately excluded per organizer decision (see file header).
+  // signup_token is selected so each recipient gets a playerPageUrl below.
   // ------------------------------------------------------------------
   const { data: confirmedRows, error: confirmedError } = await supabaseAdmin
     .from('availability')
@@ -145,7 +174,6 @@ export async function POST(request, { params }) {
         weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
       })
     : 'Unknown date'
-  const locationName = session.locations?.name ?? 'TBD'
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
   const recipients = (confirmedRows ?? [])
@@ -154,14 +182,13 @@ export async function POST(request, { params }) {
       playerFirstName: r.players.first_name,
       playerEmail: r.players.email,
       sessionDateLabel,
-      locationName,
+      locationName, // null on split days — email uses day-level wording
       cancellationNote,
       playerPageUrl: r.players.signup_token
         ? `${baseUrl}/signup/${r.players.signup_token}`
         : undefined,
     }))
 
-    
   let emailResult = { sent: 0, failed: 0 }
   if (recipients.length > 0) {
     console.log(`[api/sessions/${sessionId}/cancel] sending cancellation notice to ${recipients.length} confirmed player(s)`)

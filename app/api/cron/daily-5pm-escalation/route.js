@@ -7,20 +7,39 @@
  * reschedule the cron. The setting controls the email copy only in V2.
  *
  * PURPOSE:
- * Read-only check (see THIS REVISION note below for one addition). For
- * every closed, non-cancelled session scheduled for tomorrow that is
- * still short (has tentative players), sends the organiser an escalation
+ * Read-only check (see the waitlist-expiry note below for one addition).
+ * For every closed, non-cancelled session scheduled for tomorrow that is
+ * still short (has tentative players), sends the organizer an escalation
  * notice with full context and a recommendation to begin manual outreach
  * before the 6pm automated broadcast window closes.
  *
- * No player notifications. Organiser-only email.
+ * No player notifications. Organizer-only email.
+ *
+ * REVISION (Oct 30, 2026 — split-location day sweep):
+ *   SYMPTOM: the escalation notice's session line named the session's venue
+ *   (falling back to the literal text "TBD") even on a split-location day,
+ *   where nobody — including the organizer — knows which venue a player
+ *   will be at until court assignment is approved/sent.
+ *   ROOT CAUSE: venue was read straight off the session record
+ *   (session.locations.name), a per-session guess made before assignment.
+ *   FIX: venue now comes from getVenueForEmail(session.id)
+ *   (lib/day-capacity.js), which returns null on split days and on any
+ *   query error; sendEscalationNotice drops the venue from the session line
+ *   when null. The `locations ( name )` join is dropped and the
+ *   '?? "TBD"' fallback is removed on purpose.
+ *   KNOWN CONSEQUENCE, NOT CHANGED: this cron still sends one notice per
+ *   short session record. On a split day where BOTH sibling sessions are
+ *   short, the organizer now receives two notices with the same subject and
+ *   no venue to tell them apart (the date, time and roster counts in the
+ *   body still differ). Combining them into one per-day notice is a design
+ *   change, flagged for the split-day review.
  *
  * THIS REVISION (Sept 2026 session — waitlist-expiry redesign): this cron
  * now also calls checkAllExpiredWaitlists() (lib/sub-requests.js) once, at
  * the very start of the run, before the escalation-email logic below. This
  * is the final backstop for the waitlist-expiry redesign — see that
  * function's own header for the full design. It is silent to the
- * organiser (checkAllExpiredWaitlists only emails players via
+ * organizer (checkAllExpiredWaitlists only emails players via
  * broadcastToAllAvailable), so this cron's own escalation email is
  * unaffected in tone or trigger condition. Running it first means that if
  * it does expire and expand a stale waitlist broadcast for a session this
@@ -36,7 +55,7 @@
  *   2. For each: is it short?
  *      COUNT(availability WHERE court_assignment_status = 'tentative') > 0
  *   3. If short: fetch sub request status and last cancellation time.
- *      Send escalation notice to organiser.
+ *      Send escalation notice to organizer.
  *   4. If not short: no action.
  *
  * FIX (Sept 3 session — found live during the two-week cron load test):
@@ -59,10 +78,10 @@
  * same root cause, third file, first time this cron's version of it was
  * actually exercised live (this test had not previously had a partial
  * claim happen before this cron's own tomorrow-session check ran). The
- * standalone waitlist-expiry.js cron (retired this session, see
- * lib/sub-requests.js) had the exact same bug in its own subsNeeded
- * calculation — the fourth occurrence of this pattern, fixed as part of
- * that retirement rather than separately.
+ * standalone waitlist-expiry.js cron (retired, see lib/sub-requests.js)
+ * had the exact same bug in its own subsNeeded calculation — the fourth
+ * occurrence of this pattern, fixed as part of that retirement rather
+ * than separately.
  *
  * Fixed by deriving subsNeeded from totalSignedUp (confirmedCount +
  * tentativeCount) % 4, not tentativeCount alone. The `|| 4` fallback is
@@ -78,10 +97,10 @@
  * Phase 2 Section 5.4) regardless of subsNeeded's value.
  *
  * Tables read:  sessions, availability, sub_requests, weeks (via join),
- *               locations (via join), admin_settings
+ *               admin_settings
  * Tables written: sub_requests (indirectly, via checkAllExpiredWaitlists —
- *               see THIS REVISION note above)
- * Emails sent:  sendEscalationNotice — one per short session (organiser only)
+ *               see the waitlist-expiry note above)
+ * Emails sent:  sendEscalationNotice — one per short session (organizer only)
  *
  * References:
  *   Phase 1 Cron Map — Section 4.7
@@ -89,6 +108,7 @@
  *   Automation Logic — Section 12.6 (escalation logic)
  *   Phase 3 Cross-Lifecycle — Group 3 (sub request outcomes → availability)
  *   lib/sub-requests.js — checkAllExpiredWaitlists (waitlist-expiry backstop)
+ *   Oct 30, 2026 state handoff — split-location day governing rule
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -96,6 +116,7 @@ import { sendEscalationNotice } from '@/lib/email'
 import { formatDeadlineTime } from '@/lib/utils'
 import { getAdminEmail } from '@/lib/admin-settings'
 import { checkAllExpiredWaitlists } from '@/lib/sub-requests'
+import { getVenueForEmail } from '@/lib/day-capacity'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -111,11 +132,11 @@ export async function GET(request) {
   }
 
   // ------------------------------------------------------------------
-  // THIS REVISION: silent waitlist-expiry backstop. Runs first, before
-  // any escalation-email logic, so that if it expires and expands a
-  // stale waitlist broadcast, the per-session sub-request-status lookup
-  // further down in this same run reflects the post-expansion state.
-  // Sends no organiser email of its own — see lib/sub-requests.js header.
+  // Silent waitlist-expiry backstop. Runs first, before any
+  // escalation-email logic, so that if it expires and expands a stale
+  // waitlist broadcast, the per-session sub-request-status lookup further
+  // down in this same run reflects the post-expansion state. Sends no
+  // organizer email of its own — see lib/sub-requests.js header.
   // ------------------------------------------------------------------
   let waitlistExpiryOutcomes
   try {
@@ -167,8 +188,9 @@ export async function GET(request) {
 
   // ------------------------------------------------------------------
   // Query closed, non-cancelled sessions scheduled for tomorrow in a
-  // sent week. Join locations for the email and weeks to filter by
-  // week status (only sessions in active sent weeks matter).
+  // sent week. Join weeks to filter by week status (only sessions in
+  // active sent weeks matter). The venue is resolved per session below
+  // via getVenueForEmail rather than joined here.
   // ------------------------------------------------------------------
   const { data: tomorrowSessions, error: sessionsError } = await supabaseAdmin
     .from('sessions')
@@ -177,7 +199,6 @@ export async function GET(request) {
       session_date,
       start_time,
       courts_available,
-      locations ( name ),
       weeks!inner ( status )
     `)
     .eq('session_date', tomorrowStr)
@@ -264,7 +285,7 @@ export async function GET(request) {
 
     // ------------------------------------------------------------------
     // Fetch the most recent sub request for this session to report its
-    // status to the organiser. If the waitlist-expiry backstop above
+    // status to the organizer. If the waitlist-expiry backstop above
     // expired and expanded a stale broadcast for this session, this
     // query will already reflect the fresh all_available/late_cancellation
     // request rather than the closed waitlist one.
@@ -281,7 +302,7 @@ export async function GET(request) {
 
     // ------------------------------------------------------------------
     // Fetch the most recent post-close cancellation timestamp for this
-    // session. Gives the organiser context on how long ago things went
+    // session. Gives the organizer context on how long ago things went
     // short. Filter to cancelled records only (status = 'cancelled').
     // ------------------------------------------------------------------
     const { data: lastCancellation } = await supabaseAdmin
@@ -310,7 +331,9 @@ export async function GET(request) {
         })
       : 'TBD'
 
-    const locationName = session.locations?.name ?? 'TBD'
+    // Oct 30: null on split-location days or lookup error — the notice
+    // drops the venue from its session line. No 'TBD' fallback on purpose.
+    const { locationName } = await getVenueForEmail(session.id)
 
     console.log(
       `[daily-5pm-escalation] Session ${session.id} (${sessionDateLabel}) is short: ` +
@@ -319,7 +342,7 @@ export async function GET(request) {
     )
 
     // ------------------------------------------------------------------
-    // Send escalation notice to organiser.
+    // Send escalation notice to organizer.
     // ------------------------------------------------------------------
     if (adminEmail) {
       const sent = await sendEscalationNotice({

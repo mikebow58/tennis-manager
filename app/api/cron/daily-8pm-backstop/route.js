@@ -7,7 +7,7 @@
  *
  * PURPOSE (Phase 1 Section 4.9):
  * Hard backstop. Fires unconditionally for any session with unsent assignment
- * details. Does not wait for organiser action.
+ * details. Does not wait for organizer action.
  *
  * STEP 1 — Auto-send court assignment details:
  *   Query sessions WHERE session_date = tomorrow AND court_assignment_sent_at IS NULL
@@ -26,25 +26,56 @@
  *   If any: set their availability.status → 'cancelled', cancelled_at = now(),
  *   court_assignment_status = null.
  *   Send court cancellation notices to those players (batch).
- *   Alert the organiser simultaneously.
+ *   Alert the organizer simultaneously.
  *
  *   BUG FIX (dev session Sep 1, 2026): the update now also sets
  *   cancellation_reason = 'court_not_filled'. Previously this wrote plain
  *   status = 'cancelled', identical to a real player cancellation or
- *   organiser removal — the admin dashboard's cancellation count
+ *   organizer removal — the admin dashboard's cancellation count
  *   (app/page.js) was counting these court-didn't-fill releases as
  *   cancellations, which they are not. The court-assignment approve route
  *   (/api/admin/court-assignment/[sessionID]/approve) sets the same reason
- *   value when the organiser manually cancels an incomplete court before
+ *   value when the organizer manually cancels an incomplete court before
  *   8pm — both represent the same underlying event. See migration
  *   20260901000000_add_cancellation_reason.sql.
  *
  * STEP 3 — Nothing to do:
  *   If Step 1 returns 0 rows: exit cleanly. All assignments already sent
- *   (organiser approved before 8pm).
+ *   (organizer approved before 8pm).
  *
- * Tables read:   sessions, availability, players, locations (join),
- *                court_assignments, weeks (join)
+ * REVISION (Oct 30, 2026 — split-location day sweep):
+ *   WHAT IS AND ISN'T A "GUESS." The venue on the full-details and the
+ *   details-only (court_number missing) branches comes from each player's
+ *   own court_assignments row — the venue Procedure 2 actually assigned
+ *   that player to — so it is post-assignment information and is unchanged
+ *   in meaning. Two places were pre-assignment guesses and are fixed:
+ *   1. AVAILABILITY FALLBACK (no court_assignments at all). SYMPTOM: on a
+ *      split-location day the fallback email named the first session
+ *      record's venue (primarySession.locations.name, falling back to
+ *      "TBD") for every player, even though players were never assigned
+ *      to venues. ROOT CAUSE: it reused one arbitrary session's venue for
+ *      the whole day. FIX: venue now comes from getVenueForEmail on the
+ *      first session of the day — null on a split day, the real venue on a
+ *      single-session day. sendCourtAssignmentDetails omits the Location
+ *      row and says the location will be confirmed separately when null.
+ *      NOTE: if this fallback ever runs on a split day, players get no
+ *      venue and the organizer is not alerted by this cron; a warning is
+ *      logged. Procedure 2 normally runs at 6pm, so this should only occur
+ *      if it failed.
+ *   2. ORGANIZER BACKSTOP ALERT. It used session.locations.name (the first
+ *      pending session's venue, or "TBD"). Now getVenueForEmail(session.id),
+ *      so it names the venue only on single-session days.
+ *   Also: the details-only branch no longer falls back to "TBD" when a
+ *   court_assignments row has no location (it passes null, and the email
+ *   omits the venue). The tentative cancellation-notice payload no longer
+ *   carries locationName (sendCourtCancellationNotice never rendered it).
+ *   The `locations` joins on the session selects were dropped where no
+ *   longer used. The full-details branch still falls back to "TBD" for a
+ *   missing assigned venue, since sendCourtAssignmentDetailsFull always
+ *   prints a Location row; left unchanged (post-assignment, edge case).
+ *
+ * Tables read:   sessions, availability, players, locations (via
+ *                court_assignments join), court_assignments, weeks (join)
  * Tables written: sessions (court_assignment_sent_at),
  *                 availability (status → 'cancelled', cancelled_at,
  *                               cancellation_reason → 'court_not_filled',
@@ -53,9 +84,9 @@
  *   - sendCourtAssignmentDetailsFull — confirmed players when court numbers set
  *   - sendCourtAssignmentDetails     — confirmed players when court numbers missing
  *   - sendCourtCancellationNotice    — tentative players (batch, per session)
- *   - sendBackstopCancellationAlert  — organiser (per session with cancellations)
+ *   - sendBackstopCancellationAlert  — organizer (per session with cancellations)
  *
- * THIS REVISION (Sept 2026 session — Player page build):
+ * PRIOR REVISION (Sept 2026 session — Player page build):
  *   All three places that build a confirmed player's `cancelUrl` had the
  *   same independent bug: they pointed at `/portal/${signup_token}`, but
  *   the intended action is a per-session CANCEL, which needs
@@ -76,6 +107,7 @@
  *   Phase 2 State Machines — Section 4.5 (Procedure 2), Section 7.2
  *   Phase 3 Cross-Lifecycle — Group 5 (8pm backstop fires)
  *   Automation Logic — Section 8.2 (Path B backstop)
+ *   Oct 30, 2026 state handoff — split-location day governing rule
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -86,6 +118,7 @@ import {
   sendBackstopCancellationAlert,
 } from '@/lib/email'
 import { getAdminEmail } from '@/lib/admin-settings'
+import { getVenueForEmail } from '@/lib/day-capacity'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -124,13 +157,13 @@ export async function GET(request) {
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
   if (!adminEmail) {
-    console.error('[daily-8pm-backstop] ADMIN_EMAIL not set — organiser alerts will not send')
+    console.error('[daily-8pm-backstop] ADMIN_EMAIL not set — organizer alerts will not send')
   }
 
   // ------------------------------------------------------------------
   // STEP 1: Query sessions that still need court assignment details sent.
   // court_assignment_sent_at IS NULL = backstop hasn't already fired
-  // and organiser hasn't approved (idempotency guard).
+  // and organizer hasn't approved (idempotency guard).
   // ------------------------------------------------------------------
   const { data: pendingSessions, error: sessionsError } = await supabaseAdmin
     .from('sessions')
@@ -141,7 +174,6 @@ export async function GET(request) {
       week_id,
       courts_available,
       notes,
-      locations ( id, name ),
       weeks!inner ( status )
     `)
     .eq('session_date', tomorrowStr)
@@ -194,7 +226,7 @@ export async function GET(request) {
     // ------------------------------------------------------------------
     const { data: daySessions, error: dayError } = await supabaseAdmin
       .from('sessions')
-      .select('id, start_time, notes, location_id, locations ( id, name )')
+      .select('id, start_time, notes')
       .eq('week_id', session.week_id)
       .eq('session_date', session.session_date)
       .eq('status', 'closed')
@@ -209,6 +241,15 @@ export async function GET(request) {
     const sessionDateLabel = formatSessionDateLabel(session.session_date)
 
     console.log(`[daily-8pm-backstop] Processing day ${dayKey} — ${sessionIds.length} session(s).`)
+
+    // ------------------------------------------------------------------
+    // Oct 30, 2026: day-level venue for the pre-assignment guesses below
+    // (availability fallback + organizer alert). null on a split-location
+    // day or lookup error. Resolved once per day via the first pending
+    // session; getVenueForEmail counts the whole day's sessions, so any
+    // sibling gives the same answer.
+    // ------------------------------------------------------------------
+    const { locationName: dayLocationName, isSplitDay } = await getVenueForEmail(session.id)
 
     // ------------------------------------------------------------------
     // Read court_assignments for all confirmed players across all sessions
@@ -245,7 +286,9 @@ export async function GET(request) {
 
     if (hasCourtAssignments) {
       if (allHaveCourtNumbers) {
-        // Full details — court number included in email.
+        // Full details — court number included in email. The venue is each
+        // player's own assigned venue from court_assignments (post-
+        // assignment — unchanged).
         // BUG FIX (Sept 2026 — Player page build): cancelUrl was
         // `/portal/${signup_token}`, which is not a cancel action.
         // Corrected to the real per-session cancel route. playerPageUrl
@@ -275,7 +318,10 @@ export async function GET(request) {
         totalConfirmedNotified += sent
 
       } else {
-        // Court numbers not fully set — session details only.
+        // Court numbers not fully set — session details only. The venue is
+        // still each player's own assigned venue from court_assignments;
+        // Oct 30: if a row has none, pass null (the email omits the venue)
+        // instead of the literal text "TBD".
         // BUG FIX (Sept 2026 — Player page build): same cancelUrl fix as
         // the full-details branch above.
         const emailPayloads = confirmedAssignments.map((a) => {
@@ -285,7 +331,7 @@ export async function GET(request) {
             playerEmail: a.players.email,
             sessionDate: sessionDateLabel,
             startTime: formatStartTime(playerSession?.start_time),
-            locationName: a.locations?.name ?? 'TBD',
+            locationName: a.locations?.name ?? null,
             notes: playerSession?.notes ?? null,
             cancelUrl: `${baseUrl}/cancel/${a.players.signup_token}/${a.session_id}`,
             playerPageUrl: `${baseUrl}/signup/${a.players.signup_token}`,
@@ -309,6 +355,13 @@ export async function GET(request) {
         `[daily-8pm-backstop] No court_assignments found for day ${dayKey} — ` +
         `falling back to availability query. Procedure 2 may not have run.`
       )
+      if (isSplitDay) {
+        console.warn(
+          `[daily-8pm-backstop] Day ${dayKey} is a split-location day with no court assignments — ` +
+          `fallback emails will carry NO venue, and the organizer is not alerted by this cron. ` +
+          `Manual follow-up with players is required.`
+        )
+      }
 
       // BUG FIX (Sept 2026 — Player page build): session_id added to this
       // select. It wasn't previously selected at all, so the fallback
@@ -331,19 +384,18 @@ export async function GET(request) {
           confirmedAvailError.message
         )
       } else if (confirmedAvail?.length > 0) {
-        // Use first session's details for the fallback email (location,
-        // start time, notes) — but each player's cancelUrl uses their own
-        // actual session_id, not the primary session's, for correctness
-        // on multi-location days.
+        // Use first session's details for the fallback email (start time,
+        // notes) — but each player's cancelUrl uses their own actual
+        // session_id, not the primary session's, for correctness on
+        // multi-location days. Venue: dayLocationName (null on split days).
         const primarySession = daySessions[0]
-        const locationName = primarySession?.locations?.name ?? 'TBD'
 
         const emailPayloads = confirmedAvail.map((a) => ({
           playerFirstName: a.players.first_name,
           playerEmail: a.players.email,
           sessionDate: sessionDateLabel,
           startTime: formatStartTime(primarySession?.start_time),
-          locationName,
+          locationName: dayLocationName,
           notes: primarySession?.notes ?? null,
           cancelUrl: `${baseUrl}/cancel/${a.players.signup_token}/${a.session_id}`,
           playerPageUrl: `${baseUrl}/signup/${a.players.signup_token}`,
@@ -419,7 +471,7 @@ export async function GET(request) {
         cancelled_at: new Date().toISOString(),
         court_assignment_status: null,
         // BUG FIX (dev session Sep 1, 2026): distinguishes a court-never-
-        // filled auto-release from a real player cancellation or organiser
+        // filled auto-release from a real player cancellation or organizer
         // removal. See migration 20260901000000_add_cancellation_reason.sql.
         cancellation_reason: 'court_not_filled',
       })
@@ -442,9 +494,9 @@ export async function GET(request) {
     }
 
     // Send cancellation notices to the tentative players (batch).
-    // Group by session to get the right location per player on multi-location days.
-    // THIS REVISION: playerPageUrl added — this email previously had no
-    // link at all.
+    // PRIOR REVISION: playerPageUrl added — this email previously had no
+    // link at all. Oct 30: locationName removed from this payload —
+    // sendCourtCancellationNotice never rendered it.
     const tentativeEmailPayloads = tentativeAvail.map((a) => {
       const playerSession = daySessions.find((s) => s.id === a.session_id)
       return {
@@ -452,7 +504,6 @@ export async function GET(request) {
         playerEmail: a.players.email,
         sessionDate: sessionDateLabel,
         startTime: formatStartTime(playerSession?.start_time),
-        locationName: playerSession?.locations?.name ?? 'TBD',
         playerPageUrl: `${baseUrl}/signup/${a.players.signup_token}`,
       }
     })
@@ -465,7 +516,8 @@ export async function GET(request) {
       `sent=${cancelSent} failed=${cancelFailed}.`
     )
 
-    // Alert the organiser simultaneously.
+    // Alert the organizer simultaneously. Oct 30: venue is the day-level
+    // value (null on split-location days).
     if (adminEmail) {
       const cancelledPlayerNames = tentativeAvail.map(
         (a) => `${a.players.first_name} ${a.players.last_name}`
@@ -475,13 +527,13 @@ export async function GET(request) {
       await sendBackstopCancellationAlert({
         adminEmail,
         sessionDateLabel,
-        locationName: session.locations?.name ?? 'TBD',
+        locationName: dayLocationName,
         cancelledCourtPlayerCount: tentativeAvail.length,
         confirmedCount,
         cancelledPlayerNames,
       }).catch((err) =>
         console.error(
-          `[daily-8pm-backstop] Failed to send organiser alert for day ${dayKey}:`, err
+          `[daily-8pm-backstop] Failed to send organizer alert for day ${dayKey}:`, err
         )
       )
     }

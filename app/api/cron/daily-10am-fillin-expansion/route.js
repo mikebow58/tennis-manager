@@ -14,6 +14,25 @@
  * If the all-available pool (match-type-compatible) is empty, expands
  * further to include players regardless of match type preference.
  *
+ * REVISION (Oct 30, 2026 — split-location day sweep):
+ *   1. VENUE WORDING. SYMPTOM: the expansion broadcast named the session's
+ *      venue (falling back to the literal text "TBD") even on a split-
+ *      location day, where nobody knows which venue a player will be at
+ *      until court assignment is approved/sent. ROOT CAUSE: venue was read
+ *      straight off the session record (session.locations.name), a
+ *      per-session guess made before assignment. FIX: venue now comes from
+ *      getVenueForEmail(session.id) (lib/day-capacity.js), which returns
+ *      null on split days and on any query error; sendSubRequestBroadcast
+ *      omits the "at <venue>" wording when null. The `locations ( name )`
+ *      join is dropped and the '?? "TBD"' fallback is removed on purpose.
+ *   2. CROSS-GENDER SKILL. The roster select used to compute the targeting
+ *      skill range did not include `gender`, so resolveSkill() could not
+ *      apply the fixed cross-gender comparison adjustment (see
+ *      lib/court-balancing.js) here, unlike every other caller. `gender`
+ *      is now selected.
+ *   The same-day sibling exclusion for the pool itself lives in
+ *   lib/targeting.js (buildTargetingPool).
+ *
  * FIX (Aug 25 session): previously filtered candidate sub_requests to
  * sessions.session_date = tomorrow. That assumption held when the only
  * source of first_call requests was the old daily-8am Check A, which
@@ -58,7 +77,7 @@
  * to compute the targeting skill range, which previously excluded
  * tentative players' skill levels entirely.
  *
- * Decision tree (Phase 1 Section 4.6, as amended by both fixes above):
+ * Decision tree (Phase 1 Section 4.6, as amended by the fixes above):
  *   1. Query sub_requests WHERE request_type = 'first_call'
  *      AND status = 'active' AND DATE(sent_at) = today.
  *   2. If 0 rows: no fill-in sent this morning — exit.
@@ -77,6 +96,7 @@
  *   Automation Logic Section 6.1, Section 10 Step 4
  *   See daily-8am/route.js header comment for the full Check A retirement
  *   explanation and the known-gap note that led to the first fix above.
+ *   Oct 30, 2026 state handoff — split-location day governing rule
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -84,6 +104,7 @@ import { sendSubRequestBroadcast } from '@/lib/email'
 import { resolveSkill } from '@/lib/court-balancing'
 import { buildTargetingPool } from '@/lib/targeting'
 import { computeBroadcastDeadlineLabel } from '@/lib/sub-requests'
+import { getVenueForEmail } from '@/lib/day-capacity'
 
 export async function GET(request) {
   const startTime = Date.now()
@@ -136,8 +157,7 @@ export async function GET(request) {
           courts_available,
           match_type,
           status,
-          cancelled_at,
-          locations ( name )
+          cancelled_at
         )
       `)
       .eq('request_type', 'first_call')
@@ -161,7 +181,7 @@ export async function GET(request) {
       outcomes.noFillInThisMorning = 1
     }
 
-   for (const request of relevantRequests) {
+    for (const request of relevantRequests) {
       const session = request.sessions
       if (!session || session.cancelled_at) {
         console.log(
@@ -196,10 +216,13 @@ export async function GET(request) {
       // 5.4) — confirmedCount alone can be a clean multiple of 4 while
       // tentative players remain unfilled, which was silently treated
       // as "full" under the old confirmed-only check.
+      //
+      // Oct 30: gender added to the players select so resolveSkill() can
+      // apply the cross-gender comparison adjustment (see file header).
       // ----------------------------------------------------------------
       const { data: signedUpAvail, error: signedUpError } = await supabaseAdmin
         .from('availability')
-        .select('player_id, status, players ( skill_admin, skill_self )')
+        .select('player_id, status, players ( skill_admin, skill_self, gender )')
         .eq('session_id', session.id)
         .in('status', ['confirmed', 'tentative'])
 
@@ -240,7 +263,10 @@ export async function GET(request) {
       // ----------------------------------------------------------------
       const rosterSkills = signedUpAvail.map((a) => resolveSkill(a.players))
       const sessionMatchType = session.match_type ?? 'doubles'
-      const locationName = session.locations?.name ?? 'TBD'
+
+      // Oct 30: null on split-location days or lookup error — the
+      // broadcast then omits the venue. No 'TBD' fallback on purpose.
+      const { locationName } = await getVenueForEmail(session.id)
 
       const { allAvailablePool, allAvailableExpandedPool } = await buildTargetingPool({
         sessionId: session.id,

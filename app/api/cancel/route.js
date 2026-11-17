@@ -14,20 +14,39 @@
  *     promotion (see below). Pre-close removals are quiet and reversible —
  *     Phase 2 Section 7.3.
  *
- *     PRE-CLOSE WAITLIST PROMOTION (added this revision — closing a gap
- *     identified after Phase 3 of the unified dynamic waitlist build
- *     sequence): if the removed record's status was 'confirmed', checks
- *     whether a waitlisted player can now be promoted (see
- *     lib/waitlist-promotion.js). notifyOrganiser is TRUE here — same as
- *     /api/availability DELETE — since a player-initiated cancellation
- *     gives the organiser no other visibility into it. This was missed in
- *     the original Phase 3 pass because this file was not reviewed at that
- *     time; only /api/availability DELETE was updated, leaving the more
+ *     PRE-CLOSE WAITLIST PROMOTION: if the removed record's status was
+ *     'confirmed', checks whether a waitlisted player can now be promoted
+ *     (see lib/waitlist-promotion.js). notifyOrganiser is TRUE here — same
+ *     as /api/availability DELETE — since a player-initiated cancellation
+ *     gives the organizer no other visibility into it. This path was missed
+ *     in the original Phase 3 pass of the unified dynamic waitlist build
+ *     sequence; only /api/availability DELETE was updated, leaving the more
  *     commonly-used email-link cancellation path without promotion logic
- *     until now.
+ *     until a later revision.
+ *
+ *     REVISION (Oct 30, 2026 — split-location day sweep, handoff 3B):
+ *     SYMPTOM: on a split-location day (one day, two session records at
+ *     different venues), a confirmed player cancelling from session A while
+ *     the day's earliest waitlisted player sat on session B would NOT
+ *     trigger a promotion — the waitlist lookup is per session, so it found
+ *     nobody waitlisted on A.
+ *     ROOT CAUSE: signup is now day-level (lib/day-capacity.js chooses the
+ *     session, and when every sibling is full it waitlists the player on the
+ *     first sibling), but promotion still looked only at the session that
+ *     lost a player.
+ *     FIX: before calling promoteFromWaitlistIfOpenSpot, call
+ *     rehomeEarliestWaitlistedTo(sessionId), which moves the day's earliest
+ *     waitlisted row onto the session with the opening so the unchanged
+ *     promotion logic can find it. On a single-session day this is a no-op.
+ *     A failure in the rehome step is logged and does not block the
+ *     promotion attempt. cancelledPlayerName was already passed as the full
+ *     "First Last" name, which the organizer notice needs, so that is
+ *     unchanged. The `locations ( name )` join was also dropped from the
+ *     session select: handlePostCloseCancellation no longer reads
+ *     session.locations (venue now comes from getVenueForEmail).
  *
  *   - Post-close (session.status = 'closed'): transition availability to
- *     'cancelled' and trigger post-close cancellation logic (organiser
+ *     'cancelled' and trigger post-close cancellation logic (organizer
  *     alert + sub request evaluation) — Phase 2 Section 7.2. Unchanged.
  *
  *     BUG FIX (dev session Sep 1, 2026): the update now also sets
@@ -45,16 +64,19 @@
  * Tables written: availability (delete, status update, or promotion update)
  * Side effects: post-close cancellation triggers lib/sub-requests.js;
  *   pre-close removal of a confirmed player triggers
- *   lib/waitlist-promotion.js
+ *   lib/waitlist-promotion.js (after lib/day-capacity.js rehome)
  *
  * References:
  *   lib/waitlist-promotion.js — promotion logic and email sends
- *   app/api/availability/route.js — the parallel route this now matches
+ *   lib/day-capacity.js — rehomeEarliestWaitlistedTo
+ *   app/api/availability/route.js — the parallel route this matches
+ *   Oct 30, 2026 state handoff — Section 3B
  */
 
 import { supabaseAdmin as supabase } from '@/lib/supabase-admin'
 import { handlePostCloseCancellation } from '@/lib/sub-requests'
 import { promoteFromWaitlistIfOpenSpot } from '@/lib/waitlist-promotion'
+import { rehomeEarliestWaitlistedTo } from '@/lib/day-capacity'
 
 export async function POST(request) {
   const { availabilityId, playerId, sessionId, signup_token } = await request.json()
@@ -83,12 +105,12 @@ export async function POST(request) {
   }
 
   // ------------------------------------------------------------------
-  // Fetch the session — we need status and location for branching logic
-  // and for the cancellation alert email.
+  // Fetch the session — we need status and date/time/courts for branching
+  // logic and for the post-close cancellation handler.
   // ------------------------------------------------------------------
   const { data: session, error: sessionError } = await supabase
     .from('sessions')
-    .select('id, status, session_date, start_time, courts_available, locations ( name )')
+    .select('id, status, session_date, start_time, courts_available')
     .eq('id', sessionId)
     .single()
 
@@ -142,10 +164,23 @@ export async function POST(request) {
 
     // PRE-CLOSE WAITLIST PROMOTION — only when the removed player was
     // 'confirmed'. notifyOrganiser: true — player-initiated cancellation,
-    // same as /api/availability DELETE, since the organiser has no other
+    // same as /api/availability DELETE, since the organizer has no other
     // visibility into this action.
     if (priorStatus === 'confirmed') {
       const playerName = `${player.first_name} ${player.last_name}`.trim()
+
+      // Oct 30, 2026 (handoff 3B): on a split-location day, move the day's
+      // earliest waitlisted player onto this session so the promotion check
+      // below can find them. No-op on single-session days. Failure here
+      // must not block the promotion attempt.
+      try {
+        await rehomeEarliestWaitlistedTo(sessionId)
+      } catch (err) {
+        console.error(
+          `[api/cancel] Waitlist rehome failed for session ${sessionId} (continuing to promotion check):`, err
+        )
+      }
+
       try {
         await promoteFromWaitlistIfOpenSpot({
           sessionId,

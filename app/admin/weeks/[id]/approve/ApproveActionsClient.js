@@ -6,15 +6,39 @@
  *
  * Two actions:
  *   Approve           — POST { action: 'approve' } → week moves to 'approved'
- *                        Friday cron will send signup links automatically.
+ *                        The weekly-signup-send cron will send signup links
+ *                        automatically at the scheduled time.
  *
  *   Approve & send now — POST { action: 'approve_and_send' } → week moves to
  *                        'sent'; signup links go to all active players immediately.
- *                        Used when the organiser acts after the Friday send time
- *                        has already passed, or wants to send early.
+ *                        Used when the organizer acts after the scheduled send
+ *                        time has already passed, or wants to send early.
+ *                        Now behind a confirmation step (see below).
  *
- * After a successful action, redirects to /weeks so the organiser can see
+ * After a successful action, redirects to /weeks so the organizer can see
  * the updated week status on the dashboard.
+ *
+ * REVISION (Nov 17, 2026 — signup send moved from Friday 9:30am to Wednesday
+ * 6:00pm):
+ *   1. COPY: the two help texts under the buttons said "Friday morning" / "the
+ *      Friday send time". They now read the day/time from
+ *      lib/signup-schedule.js (SIGNUP_SEND_LABEL, e.g. "Wednesday at 6:00pm"),
+ *      the single code-side source that must match the weekly-signup-send
+ *      schedule in vercel.json. That module contains only constants, so
+ *      importing it into a client component is safe.
+ *   2. CONFIRMATION STEP (closes a gap flagged the same day): "Approve & send
+ *      signup links now" used to fire immediately on a single tap, emailing
+ *      every active player, even though Automation Logic Section 1 specifies
+ *      a confirmation before a manual send ("Send signup requests for the
+ *      week of [date]? This will notify all active players and begin the
+ *      signup window."). The button now opens an inline confirmation panel
+ *      with that text and two buttons ("Yes, send now" / "Cancel"). An inline
+ *      panel is used rather than window.confirm because this is a phone-first
+ *      admin UI and matches the two-tap confirm pattern already used for
+ *      delete in the session row editor. While the panel is open the plain
+ *      "Approve" button is disabled so the two paths can't be mixed up. The
+ *      weekLabel prop, previously unused, supplies the date in the text.
+ *      Plain "Approve" sends nothing to players, so it needs no confirmation.
  *
  * @param {object} props
  * @param {string} props.weekId    - Week UUID
@@ -25,6 +49,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { SIGNUP_SEND_LABEL } from '@/lib/signup-schedule'
 
 export default function ApproveActionsClient({ weekId, weekLabel }) {
   const router = useRouter()
@@ -32,6 +57,9 @@ export default function ApproveActionsClient({ weekId, weekLabel }) {
   // Tracks which action is in flight — 'approve' | 'approve_and_send' | null
   const [pending, setPending] = useState(null)
   const [error, setError] = useState(null)
+
+  // True while the "send now" confirmation panel is showing.
+  const [confirmingSend, setConfirmingSend] = useState(false)
 
   /**
    * Fires the approve API and handles redirect on success.
@@ -60,7 +88,7 @@ export default function ApproveActionsClient({ weekId, weekLabel }) {
 
       console.log('[ApproveActionsClient] Action succeeded:', data)
 
-      // Redirect to weeks list so organiser can see the updated status
+      // Redirect to weeks list so organizer can see the updated status
       router.push('/weeks')
 
     } catch (err) {
@@ -86,7 +114,7 @@ export default function ApproveActionsClient({ weekId, weekLabel }) {
       <div>
         <button
           onClick={() => handleAction('approve')}
-          disabled={pending !== null}
+          disabled={pending !== null || confirmingSend}
           className="w-full bg-green-600 text-white px-4 py-3 rounded-xl text-sm font-medium
                      hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
@@ -94,7 +122,7 @@ export default function ApproveActionsClient({ weekId, weekLabel }) {
         </button>
         <p className="text-xs text-gray-400 mt-2">
           Marks the week as approved. Signup links will be sent automatically
-          on Friday morning.
+          on {SIGNUP_SEND_LABEL}.
         </p>
       </div>
 
@@ -108,23 +136,51 @@ export default function ApproveActionsClient({ weekId, weekLabel }) {
         </div>
       </div>
 
-      {/* Approve & send now button */}
+      {/* Approve & send now — first tap opens the confirmation panel; only
+          "Yes, send now" calls the API. */}
       <div>
-        <button
-          onClick={() => handleAction('approve_and_send')}
-          disabled={pending !== null}
-          className="w-full bg-blue-600 text-white px-4 py-3 rounded-xl text-sm font-medium
-                     hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {pending === 'approve_and_send'
-            ? 'Sending…'
-            : 'Approve & send signup links now'}
-        </button>
-        <p className="text-xs text-gray-400 mt-2">
-          Approves the week and immediately sends personalised signup links to
-          all active players. Use this if the Friday send time has already
-          passed, or if you want to send early.
-        </p>
+        {!confirmingSend ? (
+          <>
+            <button
+              onClick={() => setConfirmingSend(true)}
+              disabled={pending !== null}
+              className="w-full bg-blue-600 text-white px-4 py-3 rounded-xl text-sm font-medium
+                         hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Approve &amp; send signup links now
+            </button>
+            <p className="text-xs text-gray-400 mt-2">
+              Approves the week and immediately sends personalised signup links to
+              all active players. Use this if the {SIGNUP_SEND_LABEL} send time has
+              already passed, or if you want to send early.
+            </p>
+          </>
+        ) : (
+          <div className="border border-blue-200 bg-blue-50 rounded-xl px-4 py-4 space-y-3">
+            <p className="text-sm text-blue-900">
+              Send signup requests for the week of <strong>{weekLabel}</strong>?
+              This will notify all active players and begin the signup window.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => handleAction('approve_and_send')}
+                disabled={pending !== null}
+                className="flex-1 bg-blue-600 text-white px-4 py-3 rounded-xl text-sm font-medium
+                           hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {pending === 'approve_and_send' ? 'Sending…' : 'Yes, send now'}
+              </button>
+              <button
+                onClick={() => setConfirmingSend(false)}
+                disabled={pending !== null}
+                className="flex-1 bg-white text-gray-700 border border-gray-300 px-4 py-3 rounded-xl
+                           text-sm font-medium hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
     </div>

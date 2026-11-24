@@ -5,16 +5,16 @@
       "schedule": "0 13 * * 1"
     },
     {
-      "path": "/api/cron/wednesday-approval-reminder",
+      "path": "/api/cron/approval-reminder",
+      "schedule": "0 12 * * 2"
+    },
+    {
+      "path": "/api/cron/urgent-approval-reminder",
       "schedule": "0 12 * * 3"
     },
     {
-      "path": "/api/cron/thursday-urgent-reminder",
-      "schedule": "0 12 * * 4"
-    },
-    {
-      "path": "/api/cron/friday-signup-send",
-      "schedule": "30 15 * * 5"
+      "path": "/api/cron/weekly-signup-send",
+      "schedule": "0 0 * * 4"
     },
     {
       "path": "/api/cron/daily-8am",

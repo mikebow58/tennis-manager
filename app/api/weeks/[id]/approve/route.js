@@ -6,27 +6,42 @@
  * Supported actions (passed in request body):
  *   "approve"          — pending_approval → approved
  *                        Sets weeks.approved_at. No player emails.
- *                        Used when the organiser approves before the Friday
- *                        signup send time has passed.
+ *                        Used when the organizer approves before the
+ *                        scheduled signup send time (Wednesday 6:00pm
+ *                        Mountain — see lib/signup-schedule.js) has passed.
  *
  *   "approve_and_send" — pending_approval → sent
  *                        Single transaction: sets both approved_at and
  *                        signup_sent_at simultaneously, then sends personalised
  *                        signup emails to all active players.
- *                        Used when the organiser acts after the Friday send
- *                        time has already passed (Phase 2 Section 3.2).
+ *                        Used when the organizer acts after the scheduled
+ *                        send time has already passed (Phase 2 Section 3.2).
+ *
+ * REVISION (Nov 17, 2026 — signup send moved from Friday 9:30am to Wednesday
+ * 6:00pm):
+ *   1. Comments updated: the send time is no longer Friday, and the cron that
+ *      this route must not race is now weekly-signup-send (renamed from
+ *      friday-signup-send). The route itself does not compare the clock to the
+ *      send time — the caller (the approve page / ApproveWeekClient) chooses
+ *      the action — so no logic here depends on the day.
+ *   2. BUG FIX: the approve_and_send email payload passed `portalUrl`, but
+ *      lib/email.js's sendSignupRequestBatch reads `playerPageUrl` (renamed
+ *      in Sept 2026, when the cron and /api/send-signup-requests were updated
+ *      but this route was missed). Signup emails sent through approve-and-send
+ *      therefore had no Player page bookmark link in the footer. The payload
+ *      now uses `playerPageUrl`.
  *
  * Guards:
  *   - Week must be in pending_approval status. Any other status returns 409.
  *   - approve_and_send uses a single DB write before sending emails, preventing
- *     the friday_signup_send cron from racing between the two writes.
+ *     the weekly-signup-send cron from racing between the two writes.
  *
  * Tables touched:
  *   weeks (read + update)
  *   players (read — approve_and_send only)
  *
  * Emails sent:
- *   Organiser: approval confirmation (both actions)
+ *   Organizer: approval confirmation (approve action only)
  *   All active players: personalised signup links (approve_and_send only)
  */
 
@@ -114,14 +129,15 @@ export async function POST(request, { params }) {
 
     console.log('[approve] weeks.status → "approved" written successfully')
 
-    // Notify organiser that the week has been approved and the friday cron
-    // will send signup links automatically on the scheduled day.
+    // Notify organizer that the week has been approved and the
+    // weekly-signup-send cron will send signup links automatically at the
+    // scheduled time (the email copy states that time).
     const adminEmail = await getAdminEmail()
     if (adminEmail) {
       await sendWeekApprovedNotification({ adminEmail, weekLabel, weekId })
-      console.log('[approve] Organiser approval confirmation email sent')
+      console.log('[approve] Organizer approval confirmation email sent')
     } else {
-      console.warn('[approve] ADMIN_EMAIL not set — skipping organiser notification')
+      console.warn('[approve] Admin email not configured — skipping organizer notification')
     }
 
     const duration = Date.now() - startTime
@@ -131,7 +147,7 @@ export async function POST(request, { params }) {
 
   // ── Branch: approve_and_send (pending_approval → sent) ───────────────────
   // Single transaction: write both approved_at and signup_sent_at before
-  // sending any emails. This prevents the friday_signup_send cron from racing
+  // sending any emails. This prevents the weekly-signup-send cron from racing
   // between the two writes and triggering a double-send.
   console.log('[approve] Executing approve_and_send path — writing "sent" status atomically')
 
@@ -162,7 +178,7 @@ export async function POST(request, { params }) {
 
   if (playersError) {
     // DB write already succeeded — week is in "sent" status.
-    // Log the error but don't return a failure response; the organiser
+    // Log the error but don't return a failure response; the organizer
     // can manually resend from the dashboard if needed.
     console.error('[approve] Failed to fetch players for signup send:', playersError)
     return Response.json({
@@ -178,16 +194,18 @@ export async function POST(request, { params }) {
   // never hardcoded, so dev preview and production both work correctly.
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://gtcourts.com'
 
-  // Build signup email array — one entry per active player
+  // Build signup email array — one entry per active player.
+  // playerPageUrl is the permanent Player page link rendered as a bookmark
+  // footer in the signup email (BUG FIX Nov 17, 2026: this was `portalUrl`,
+  // which lib/email.js no longer reads — see file header).
   const signupEmails = players
-  .filter((p) => p.email && p.signup_token)
-  .map((p) => ({
-    playerFirstName: p.first_name,
-    playerEmail: p.email,
-    signupUrl: `${baseUrl}/signup/${p.signup_token}`,
-    // portalUrl is included in the signup email footer so players can bookmark it
-    portalUrl: `${baseUrl}/signup/${p.signup_token}`,
-  }))
+    .filter((p) => p.email && p.signup_token)
+    .map((p) => ({
+      playerFirstName: p.first_name,
+      playerEmail: p.email,
+      signupUrl: `${baseUrl}/signup/${p.signup_token}`,
+      playerPageUrl: `${baseUrl}/signup/${p.signup_token}`,
+    }))
 
   console.log(`[approve] Sending signup emails to ${signupEmails.length} players`)
 

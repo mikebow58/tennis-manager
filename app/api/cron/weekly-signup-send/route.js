@@ -1,21 +1,47 @@
 /**
- * friday-signup-send — Vercel Cron Job
+ * weekly-signup-send — Vercel Cron Job
  *
- * Scheduled: 09:30 Friday (admin-adjustable in admin_settings, but the Vercel
- * cron schedule itself is fixed at 09:30. If the send time changes, vercel.json
- * must also be updated to match.)
+ * (Renamed from friday-signup-send on Nov 17, 2026 — see REVISION below.
+ * Delete app/api/cron/friday-signup-send/ when deploying this file.)
+ *
+ * Scheduled: Wednesday 6:00pm Mountain (MDT).
+ * vercel.json schedule: "0 0 * * 4" — that is Thursday 00:00 UTC, which is
+ * Wednesday 18:00 MDT. In MST (UTC-7) the same UTC schedule fires at 5:00pm
+ * local; see the daylight saving note in lib/signup-schedule.js. The send
+ * time is NOT driven by admin_settings: changing a database value cannot move
+ * a Vercel cron. If the send time changes, vercel.json AND
+ * lib/signup-schedule.js must both be updated to match.
+ *
+ * REVISION (Nov 17, 2026 — signup send moved from Friday 9:30am to Wednesday
+ * 6:00pm):
+ *   WHY: so Monday and Tuesday sessions get the same signup window as every
+ *   other day, instead of a compressed timeline that needed "anticipated"
+ *   court counts. Players now have roughly Wednesday evening through the
+ *   session reminder (two days prior for every session day) to sign up.
+ *   WHAT CHANGED IN THIS FILE: renamed (the old name would have lied); log
+ *   prefix and comments updated; "upcoming Monday" now comes from the shared
+ *   Mountain-time helper in lib/week-dates.js instead of raw UTC arithmetic —
+ *   at 6:00pm Mountain the UTC weekday is already Thursday, so UTC math was a
+ *   trap for manual evening testing (the real schedule happened to land on the
+ *   same Monday either way). Decision logic and failure behavior are
+ *   otherwise unchanged. The old "no timing risk, 9:30am is nowhere near UTC
+ *   midnight" note no longer applies and has been removed.
+ *   NOT CHANGED: a partial email failure still marks the week 'sent' (see the
+ *   failed > 0 branch below) — flagged separately in the Oct 30 handoff
+ *   alongside the Resend free-plan quota (100 emails/day), which a 150-200
+ *   player send exceeds.
  *
  * Decision tree (Phase 1 Section 4.4):
  *   1. Query weeks WHERE week_start_date = upcoming Monday.
  *   2. status = 'approved'  → send personalised signup links to all active players
  *                             → UPDATE weeks SET status = 'sent', signup_sent_at = now()
  *   3. status = 'sent'      → manual send already fired before cron; exit, no action.
- *   4. status = 'pending_approval' → skip send; notify organiser with approval link.
+ *   4. status = 'pending_approval' → skip send; notify organizer with approval link.
  *   5. No week found        → log and exit. Nothing to do.
  *
  * Emails sent:
  *   - Active players: personalised signup link (batch via sendSignupRequestBatch)
- *   - Organiser: skip notification with approval link (via sendSignupSkippedNotification)
+ *   - Organizer: skip notification with approval link (via sendSignupSkippedNotification)
  *
  * DB writes:
  *   - weeks.status → 'sent', weeks.signup_sent_at = now() (approved path only)
@@ -23,36 +49,22 @@
  * Tables read: weeks, players
  * Tables written: weeks
  *
- * THIS REVISION (Sept 2026 session — Player page build): the per-player
+ * PRIOR REVISION (Sept 2026 session — Player page build): the per-player
  * payload's `portalUrl` field renamed to `playerPageUrl` for naming
- * consistency (per organiser decision, state handoff Sept 11 2026), and
+ * consistency (per organizer decision, state handoff Sept 11 2026), and
  * its value corrected from `/portal/${token}` (a route that was never
  * built and never will be) to `/signup/${token}` — the permanent Player
  * page. lib/email.js's sendSignupRequestBatch updated to match this field
  * name in the same session.
  *
- * BUG FIX (dev session Aug 25, 2026, part 1): "upcoming Monday" was
+ * PRIOR BUG FIX (dev session Aug 25, 2026, part 1): "upcoming Monday" was
  * previously computed as a hardcoded `today + 3 days` — correct only when
- * this cron actually runs on a Friday (the only day Vercel's real schedule
- * ever triggers it). Manually triggering it on any other day during dev
- * testing produced a wrong date, causing a false "no_week_found" result
- * even though the correct week existed. Fixed with a real day-of-week-aware
- * calculation so this cron can be manually triggered correctly on any day,
- * not just Friday. Production behavior is unchanged, since the real
- * schedule only ever invokes it on a Friday.
+ * this cron actually ran on a Friday. Replaced with a day-of-week-aware
+ * calculation so the cron can be triggered manually on any day; superseded
+ * again by the Mountain-time helper noted above.
  *
- * BUG FIX (dev session Aug 25, 2026, part 2): every response branch
- * computed (or could compute) elapsed duration and logged it via
- * console.log, but never included it in the returned JSON — meaning
- * timing data required digging into Vercel function logs instead of just
- * reading the curl output, unlike every other cron file in this codebase.
- * elapsedMs now included in every response for consistency.
- *
- * NOTE: like the original code, this still uses raw UTC date arithmetic
- * rather than the Mountain-Time-safe Intl.DateTimeFormat pattern used
- * elsewhere in the codebase (e.g. daily-8am's toMountainDateStr). Low risk
- * here specifically since 9:30am Mountain is nowhere near UTC midnight
- * rollover, but flagged for consistency if this file is touched again.
+ * PRIOR BUG FIX (dev session Aug 25, 2026, part 2): elapsedMs is included in
+ * every response for consistency with the other crons.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -61,11 +73,12 @@ import {
   sendSignupSkippedNotification,
 } from '@/lib/email'
 import { getAdminEmail } from '@/lib/admin-settings'
+import { getUpcomingMondayStr } from '@/lib/week-dates'
 
 export async function GET(request) {
   // Record entry time for execution duration logging.
   const startTime = Date.now()
-  console.log('[friday-signup-send] Cron fired at', new Date().toISOString())
+  console.log('[weekly-signup-send] Cron fired at', new Date().toISOString())
 
   // ------------------------------------------------------------------
   // Guard: verify the request is coming from Vercel's cron scheduler.
@@ -74,30 +87,19 @@ export async function GET(request) {
   // ------------------------------------------------------------------
   const authHeader = request.headers.get('authorization')
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    console.warn('[friday-signup-send] Unauthorised request — missing or invalid CRON_SECRET')
+    console.warn('[weekly-signup-send] Unauthorised request — missing or invalid CRON_SECRET')
     return new Response('Unauthorised', { status: 401 })
   }
 
   // ------------------------------------------------------------------
   // Step 1: Calculate the upcoming Monday's date — the next Monday from
-  // today, always looking forward (never today itself, even if today
-  // happens to be a Monday — this cron always targets a week that hasn't
-  // started yet). All date logic is performed in UTC to match Supabase's
-  // stored values. week_start_date is stored as a date-only string:
-  // 'YYYY-MM-DD'.
+  // today in Mountain time, always looking forward (never today itself,
+  // even if today happens to be a Monday — this cron always targets a
+  // week that hasn't started yet). week_start_date is stored as a
+  // date-only string: 'YYYY-MM-DD'.
   // ------------------------------------------------------------------
-  const today = new Date()
-  const dayOfWeek = today.getUTCDay() // 0=Sun, 1=Mon, ..., 6=Sat
-
-  let daysUntilMonday = (8 - dayOfWeek) % 7
-  if (daysUntilMonday === 0) daysUntilMonday = 7 // today is Monday — target next week's Monday, not today
-
-  const upcomingMonday = new Date(today)
-  upcomingMonday.setUTCDate(today.getUTCDate() + daysUntilMonday)
-
-  // Format as 'YYYY-MM-DD' for the Supabase date column comparison.
-  const upcomingMondayStr = upcomingMonday.toISOString().split('T')[0]
-  console.log('[friday-signup-send] Looking for week with week_start_date =', upcomingMondayStr)
+  const upcomingMondayStr = getUpcomingMondayStr()
+  console.log('[weekly-signup-send] Looking for week with week_start_date =', upcomingMondayStr)
 
   // ------------------------------------------------------------------
   // Step 2: Query the week for upcoming Monday.
@@ -110,7 +112,7 @@ export async function GET(request) {
 
   if (weekError) {
     // A real database error — log and exit with 500.
-    console.error('[friday-signup-send] Error querying weeks table:', weekError.message)
+    console.error('[weekly-signup-send] Error querying weeks table:', weekError.message)
     return new Response('Database error', { status: 500 })
   }
 
@@ -118,15 +120,15 @@ export async function GET(request) {
     // No week exists for upcoming Monday. This should not happen in normal
     // operation (monday_week_creation always creates it), but handle gracefully.
     const elapsed = Date.now() - startTime
-    console.log('[friday-signup-send] No week found for', upcomingMondayStr, '— nothing to do. Exiting.')
-    console.log(`[friday-signup-send] Completed in ${elapsed}ms`)
+    console.log('[weekly-signup-send] No week found for', upcomingMondayStr, '— nothing to do. Exiting.')
+    console.log(`[weekly-signup-send] Completed in ${elapsed}ms`)
     return new Response(JSON.stringify({ status: 'no_week_found', weekDate: upcomingMondayStr, elapsedMs: elapsed }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
   }
 
-  console.log('[friday-signup-send] Week found — id:', week.id, '| status:', week.status)
+  console.log('[weekly-signup-send] Week found — id:', week.id, '| status:', week.status)
 
   // ------------------------------------------------------------------
   // Build a human-readable week label for email subjects.
@@ -144,28 +146,28 @@ export async function GET(request) {
   // ------------------------------------------------------------------
 
   // --- Branch: already sent (manual send beat the cron) ---------------
-  // The organiser sent manually before this cron fired. The week is already
+  // The organizer sent manually before this cron fired. The week is already
   // in 'sent' status. No action needed — the cron exits cleanly.
   if (week.status === 'sent') {
-    console.log('[friday-signup-send] Week already in sent status — manual send preceded cron. No action. Exiting.')
+    console.log('[weekly-signup-send] Week already in sent status — manual send preceded cron. No action. Exiting.')
     const elapsed = Date.now() - startTime
-    console.log(`[friday-signup-send] Completed in ${elapsed}ms`)
+    console.log(`[weekly-signup-send] Completed in ${elapsed}ms`)
     return new Response(JSON.stringify({ status: 'already_sent', weekId: week.id, elapsedMs: elapsed }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     })
   }
 
-  // --- Branch: pending_approval — skip send, notify organiser ----------
+  // --- Branch: pending_approval — skip send, notify organizer ----------
   // Week hasn't been approved yet. Players cannot be sent an unapproved week.
-  // Notify the organiser with a direct link to the approval page.
+  // Notify the organizer with a direct link to the approval page.
   if (week.status === 'pending_approval') {
-    console.log('[friday-signup-send] Week still in pending_approval — skipping send, notifying organiser.')
+    console.log('[weekly-signup-send] Week still in pending_approval — skipping send, notifying organizer.')
 
     const adminEmail = await getAdminEmail()
     if (!adminEmail) {
-      console.error('[friday-signup-send] ADMIN_EMAIL env var not set — cannot send skip notification.')
-      return new Response('Configuration error: ADMIN_EMAIL not set', { status: 500 })
+      console.error('[weekly-signup-send] Admin email not configured — cannot send skip notification.')
+      return new Response('Configuration error: admin email not set', { status: 500 })
     }
 
     const notifySuccess = await sendSignupSkippedNotification({
@@ -175,15 +177,15 @@ export async function GET(request) {
     })
 
     if (!notifySuccess) {
-      console.error('[friday-signup-send] sendSignupSkippedNotification returned false — email send failed.')
+      console.error('[weekly-signup-send] sendSignupSkippedNotification returned false — email send failed.')
       // Return 500 so Vercel logs show a failure; the cron will not auto-retry
       // but this makes the failure visible in the dashboard.
       return new Response('Failed to send skip notification', { status: 500 })
     }
 
-    console.log('[friday-signup-send] Skip notification sent to organiser successfully.')
+    console.log('[weekly-signup-send] Skip notification sent to organizer successfully.')
     const elapsed = Date.now() - startTime
-    console.log(`[friday-signup-send] Completed in ${elapsed}ms`)
+    console.log(`[weekly-signup-send] Completed in ${elapsed}ms`)
     return new Response(JSON.stringify({ status: 'skipped_pending_approval', weekId: week.id, elapsedMs: elapsed }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -193,7 +195,7 @@ export async function GET(request) {
   // --- Branch: approved — proceed with signup send ---------------------
   // Week is approved. Fetch all active players and send personalised signup links.
   if (week.status === 'approved') {
-    console.log('[friday-signup-send] Week is approved — proceeding with signup send.')
+    console.log('[weekly-signup-send] Week is approved — proceeding with signup send.')
 
     // Fetch all active players. We need: id (for player page URL), first_name,
     // last_name, email, and signup_token (for the personalised signup URL).
@@ -204,17 +206,17 @@ export async function GET(request) {
       .order('last_name', { ascending: true }) // Consistent ordering for logging.
 
     if (playersError) {
-      console.error('[friday-signup-send] Error querying players table:', playersError.message)
+      console.error('[weekly-signup-send] Error querying players table:', playersError.message)
       return new Response('Database error', { status: 500 })
     }
 
-    console.log(`[friday-signup-send] Found ${players.length} active players to notify.`)
+    console.log(`[weekly-signup-send] Found ${players.length} active players to notify.`)
 
     if (players.length === 0) {
       // No active players — unusual but not an error. Log and exit.
       const elapsed = Date.now() - startTime
-      console.warn('[friday-signup-send] No active players found — nothing to send.')
-      console.log(`[friday-signup-send] Completed in ${elapsed}ms`)
+      console.warn('[weekly-signup-send] No active players found — nothing to send.')
+      console.log(`[weekly-signup-send] Completed in ${elapsed}ms`)
       return new Response(JSON.stringify({ status: 'no_active_players', weekId: week.id, elapsedMs: elapsed }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -228,9 +230,6 @@ export async function GET(request) {
     // Build the per-player payload array. Each player gets:
     //   signupUrl      — their unique personalised signup link (token-based, no login)
     //   playerPageUrl  — their permanent Player page (bookmarkable, year-round access).
-    //                    THIS REVISION: renamed from portalUrl, and value fixed
-    //                    from /portal/${token} to /signup/${token} — see file
-    //                    header note.
     const playerPayloads = players.map((player) => ({
       playerFirstName: player.first_name,   // First name only — used in email greeting
       playerEmail: player.email,
@@ -240,15 +239,15 @@ export async function GET(request) {
 
     // Send the batch. sendSignupRequestBatch handles DEV_EMAIL_OVERRIDE
     // internally and chunks into groups of 100 for Resend's batch API.
-    console.log('[friday-signup-send] Firing batch email send...')
+    console.log('[weekly-signup-send] Firing batch email send...')
     const { sent, failed } = await sendSignupRequestBatch(playerPayloads, weekLabel)
-    console.log(`[friday-signup-send] Batch complete — sent: ${sent}, failed: ${failed}`)
+    console.log(`[weekly-signup-send] Batch complete — sent: ${sent}, failed: ${failed}`)
 
     if (failed > 0) {
       // Partial failure: some emails didn't go through. Log clearly but do not
       // abort — the DB write must still happen to prevent a double-send on any
       // retry. The failure will be visible in Vercel logs and Resend dashboard.
-      console.warn(`[friday-signup-send] ${failed} email(s) failed to send. Proceeding with DB update.`)
+      console.warn(`[weekly-signup-send] ${failed} email(s) failed to send. Proceeding with DB update.`)
     }
 
     // ------------------------------------------------------------------
@@ -272,17 +271,17 @@ export async function GET(request) {
       // The cron will see 'approved' again if it ever re-fires and could
       // attempt a double-send. This needs manual investigation.
       console.error(
-        '[friday-signup-send] CRITICAL: Email batch sent but failed to update weeks status.',
+        '[weekly-signup-send] CRITICAL: Email batch sent but failed to update weeks status.',
         'Week id:', week.id,
         'Error:', updateError.message
       )
       return new Response('Email sent but DB update failed — requires manual review', { status: 500 })
     }
 
-    console.log(`[friday-signup-send] weeks.status → 'sent', signup_sent_at recorded. Week id: ${week.id}`)
+    console.log(`[weekly-signup-send] weeks.status → 'sent', signup_sent_at recorded. Week id: ${week.id}`)
 
     const elapsed = Date.now() - startTime
-    console.log(`[friday-signup-send] Completed successfully in ${elapsed}ms`)
+    console.log(`[weekly-signup-send] Completed successfully in ${elapsed}ms`)
 
     return new Response(
       JSON.stringify({
@@ -303,8 +302,8 @@ export async function GET(request) {
   // This should never happen in normal operation. Log and exit.
   // ------------------------------------------------------------------
   const elapsed = Date.now() - startTime
-  console.warn('[friday-signup-send] Week found with unexpected status:', week.status, '— no action taken.')
-  console.log(`[friday-signup-send] Completed in ${elapsed}ms`)
+  console.warn('[weekly-signup-send] Week found with unexpected status:', week.status, '— no action taken.')
+  console.log(`[weekly-signup-send] Completed in ${elapsed}ms`)
   return new Response(JSON.stringify({ status: 'unexpected_week_status', weekStatus: week.status, elapsedMs: elapsed }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },

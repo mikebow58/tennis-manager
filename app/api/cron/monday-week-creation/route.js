@@ -1,20 +1,40 @@
 // app/api/cron/monday-week-creation/route.js
 //
 // Vercel Cron Job — fires every Monday at 07:00 Mountain Time.
-// vercel.json schedule: "0 14 * * 1"  (14:00 UTC = 07:00 MDT / 08:00 MST)
+// vercel.json schedule: "0 13 * * 1"  (13:00 UTC = 07:00 MDT / 06:00 MST)
 //
 // IMPORTANT: UTC offset changes with daylight saving time.
 // MDT (summer): UTC-6 → 07:00 MDT = 13:00 UTC → use "0 13 * * 1"
 // MST (winter): UTC-7 → 07:00 MST = 14:00 UTC → use "0 14 * * 1"
 // Update vercel.json when clocks change. Current: MDT (summer schedule).
+// (An earlier version of this comment listed "0 14 * * 1" as the schedule;
+// the actual vercel.json entry has always been "0 13 * * 1".)
 //
 // What this job does (Phase 1 Section 4.1):
 //   Step 1 — Check for a stale pending_approval week. If found, hard-delete it
-//             and notify the organiser it was dumped.
+//             and notify the organizer it was dumped.
 //   Step 2 — Create a new week record in pending_approval status.
 //   Step 3 — Create sessions from active default_sessions rows, applying the
 //             current default start time from admin_settings.
-//   Step 4 — Notify the organiser that the new week is ready for approval.
+//   Step 4 — Notify the organizer that the new week is ready for approval.
+//
+// REVISION (Nov 17, 2026 — signup send moved from Friday 9:30am to Wednesday
+// 6:00pm):
+//   This job's schedule is unchanged: the new week is still created Monday
+//   7:00am. The organizer now has until Wednesday 6:00pm (about two and a half
+//   days, down from about four) to approve it, with a standard reminder on
+//   Tuesday 6:00am and an urgent one on Wednesday 6:00am (see
+//   approval-reminder and urgent-approval-reminder). The notification email
+//   copy that names the send time lives in lib/email.js
+//   (sendWeekCreatedNotification) and reads lib/signup-schedule.js.
+//   CODE CHANGE: the local getNextMonday() (raw UTC arithmetic) and
+//   formatWeekLabel() were replaced with the shared getUpcomingMondayStr() and
+//   formatWeekRangeLabel() from lib/week-dates.js, so all the weekly-cycle
+//   crons compute "the Monday this week will start" the same way, in
+//   Mountain time. Behavior at the real 7:00am Monday schedule is identical
+//   (from Monday the next Monday is always 7 days ahead). The log message for a
+//   missing admin email no longer mentions an ADMIN_EMAIL environment
+//   variable — that variable was retired in favor of the admin_settings row.
 //
 // OPEN QUESTION OQ-01: Vercel Cron Job failure/retry behaviour is not formally
 // specified. If this job fails mid-execution (e.g. weeks row inserted but
@@ -30,6 +50,7 @@ import {
   sendWeekDumpedNotification
 } from '@/lib/email'
 import { getAdminEmail } from '@/lib/admin-settings'
+import { getUpcomingMondayStr, formatWeekRangeLabel } from '@/lib/week-dates'
 
 // Vercel calls cron routes with a GET request and validates the
 // CRON_SECRET header. This prevents the endpoint from being triggered
@@ -48,7 +69,7 @@ export async function GET(request) {
   // Read the admin email once — used for both notification types below.
   const adminEmail = await getAdminEmail()
   if (!adminEmail) {
-    console.error('[monday-week-creation] ADMIN_EMAIL environment variable is not set')
+    console.error('[monday-week-creation] Admin email is not configured')
     return new Response('Server configuration error', { status: 500 })
   }
 
@@ -118,7 +139,7 @@ export async function GET(request) {
 
       // Format the dumped week label for the notification email.
       // week_start_date is stored as a date string (YYYY-MM-DD).
-      dumpedWeekLabel = formatWeekLabel(staleWeek.week_start_date)
+      dumpedWeekLabel = formatWeekRangeLabel(staleWeek.week_start_date)
     } else {
       console.log('[monday-week-creation] Step 1: no stale week found — proceeding normally')
     }
@@ -129,7 +150,9 @@ export async function GET(request) {
     // -----------------------------------------------------------------------
     console.log('[monday-week-creation] Step 2: creating new week record')
 
-    const nextMonday = getNextMonday()
+    // Called on Monday morning, so the "upcoming Monday" is always 7 days
+    // ahead — the week being created for players to sign up for.
+    const nextMonday = getUpcomingMondayStr()
     console.log(`[monday-week-creation] Step 2: next Monday = ${nextMonday}`)
 
     const { data: newWeek, error: weekInsertError } = await supabaseAdmin
@@ -151,8 +174,8 @@ export async function GET(request) {
 
     // -----------------------------------------------------------------------
     // STEP 3 — Create sessions from active default_sessions
-    // Fetch all active default_session rows and the current default start time
-    // from admin_settings, then insert one session per default row.
+    // Fetch all active default_session rows, then insert one session per
+    // default row using that row's own default start time.
     // -----------------------------------------------------------------------
     console.log('[monday-week-creation] Step 3: fetching active default_sessions')
 
@@ -203,12 +226,12 @@ export async function GET(request) {
     }
 
     // -----------------------------------------------------------------------
-    // STEP 4 — Notify organiser
+    // STEP 4 — Notify organizer
     // If a stale week was dumped in Step 1, send that notification first.
     // Always send the new week created notification.
     // These are fire-and-forget — email failure does not roll back the DB writes.
     // -----------------------------------------------------------------------
-    console.log('[monday-week-creation] Step 4: sending organiser notification(s)')
+    console.log('[monday-week-creation] Step 4: sending organizer notification(s)')
 
     // Send the dumped week notification only if Step 1 found a stale week.
     if (dumpedWeekLabel) {
@@ -220,7 +243,7 @@ export async function GET(request) {
     }
 
     // Build the approval URL for the new week and send the created notification.
-    const weekLabel = formatWeekLabel(newWeek.week_start_date)
+    const weekLabel = formatWeekRangeLabel(newWeek.week_start_date)
     const approvalUrl = `${baseUrl}/admin/weeks/${newWeek.id}/approve`
 
     const createdSent = await sendWeekCreatedNotification({
@@ -258,28 +281,6 @@ export async function GET(request) {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns the date string (YYYY-MM-DD) for the next Monday from today.
- * Called on Monday morning — "next Monday" means the Monday 7 days ahead,
- * i.e. the week being created for players to sign up for.
- *
- * Uses UTC date arithmetic to avoid timezone-induced off-by-one errors.
- * Vercel functions run in UTC; the cron fires at a UTC time calculated to
- * match 07:00 Mountain Time.
- *
- * @returns {string} YYYY-MM-DD
- */
-function getNextMonday() {
-  const now = new Date()
-  // Day of week: 0 = Sunday ... 6 = Saturday. Monday = 1.
-  const dayOfWeek = now.getUTCDay()
-  // Days until next Monday. If today is Monday (1), daysUntil = 7 (next cycle).
-  const daysUntilNextMonday = dayOfWeek === 1 ? 7 : (8 - dayOfWeek) % 7 || 7
-  const nextMonday = new Date(now)
-  nextMonday.setUTCDate(now.getUTCDate() + daysUntilNextMonday)
-  return nextMonday.toISOString().slice(0, 10) // YYYY-MM-DD
-}
-
-/**
  * Computes the calendar date for a session given the week's Monday start date
  * and the session's day_of_week string.
  *
@@ -303,21 +304,4 @@ function getSessionDate(weekStartDate, dayOfWeek) {
   const date = new Date(weekStartDate)
   date.setUTCDate(date.getUTCDate() + offset)
   return date.toISOString().slice(0, 10)
-}
-
-/**
- * Formats a week start date (YYYY-MM-DD Monday) into a human-readable label
- * for use in email subjects and body copy.
- * Example: "2026-05-18" → "May 18 – May 23"
- *
- * @param {string} weekStartDate  - YYYY-MM-DD (always a Monday)
- * @returns {string}              - e.g. "May 18 – May 23"
- */
-function formatWeekLabel(weekStartDate) {
-  const start = new Date(weekStartDate)
-  const end = new Date(weekStartDate)
-  end.setUTCDate(start.getUTCDate() + 5) // Monday + 5 = Saturday
-
-  const options = { month: 'short', day: 'numeric', timeZone: 'UTC' }
-  return `${start.toLocaleDateString('en-US', options)} – ${end.toLocaleDateString('en-US', options)}`
 }
